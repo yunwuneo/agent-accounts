@@ -167,6 +167,14 @@ def test_other_validation_errors_do_not_echo_input(isolated_home):
     assert "12345678" not in str(exc.value)
 
 
+def test_douyin_unknown_key_is_rejected(isolated_home):
+    # 写成 auto-reply 时不能静默回落到默认 dry_run
+    _write_config(isolated_home, '[douyin]\nauto-reply = "on"\n')
+    with pytest.raises(config.ConfigError) as exc:
+        config.load()
+    assert "douyin.auto-reply" in str(exc.value)
+
+
 def test_migration_adds_new_columns_to_existing_table(isolated_home):
     import sqlite3
 

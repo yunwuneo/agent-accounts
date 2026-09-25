@@ -59,6 +59,30 @@ def test_effective_mode_needs_two_confirmations():
     assert autoreply.effective_mode(config.Config(), dry_run=False, allow_send=True) == "dry_run"
 
 
+def test_run_cli_allow_send_alone_is_second_confirmation(monkeypatch):
+    from typer.testing import CliRunner
+
+    from agent_accounts.adapters.douyin.cli import app
+
+    seen = {}
+
+    async def fake_run_once(cfg, run, *, dry_run, allow_send):
+        seen["mode"] = autoreply.effective_mode(cfg, dry_run=dry_run, allow_send=allow_send)
+        return autoreply.TickResult(mode=seen["mode"])
+
+    on = config.Config(douyin=config.DouyinConfig(auto_reply="on"))
+    monkeypatch.setattr(config, "load", lambda: on)
+    monkeypatch.setattr(autoreply, "run_once", fake_run_once)
+    for args, mode in (
+        ([], "dry_run"),
+        (["--allow-send"], "on"),
+        (["--allow-send", "--dry-run"], "dry_run"),
+    ):
+        result = CliRunner().invoke(app, ["run", "--once", *args])
+        assert result.exit_code == 0, result.output
+        assert seen["mode"] == mode
+
+
 async def test_dry_run_records_reply_with_digest_context(conv, fake_decide):
     calls = fake_decide(
         ReplyDecision(should_reply=True, text="哈哈这个好看", reason="r", confidence=0.9)

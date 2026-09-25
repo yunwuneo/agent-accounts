@@ -5,7 +5,7 @@
 
 - 首次见到的会话只记基线（handled_index = 最后一条），不回复旧消息
 - 同一会话连续多条新消息合并成一次决策
-- 真正发送需要 auto_reply = "on" 且调用方显式允许（M3 的 --allow-send）；否则一律 dry_run
+- 真正发送需要 auto_reply = "on" 且调用方显式允许（--allow-send）；否则一律 dry_run
 """
 
 from __future__ import annotations
@@ -69,6 +69,7 @@ def new_peer_messages(conv: dstore.DouyinConversation) -> list[dstore.DouyinMess
 
 
 def effective_mode(cfg: Config, *, dry_run: bool, allow_send: bool) -> str:
+    """两道确认：auto_reply = "on" 且 allow_send；dry_run=True 可强制不发送。"""
     mode = cfg.douyin.auto_reply
     if mode == "on" and (dry_run or not allow_send):
         return "dry_run"
@@ -186,7 +187,7 @@ async def _ensure_digests(
 
 
 async def run_once(
-    cfg: Config, run: RunContext, *, dry_run: bool = True, allow_send: bool = False
+    cfg: Config, run: RunContext, *, dry_run: bool = False, allow_send: bool = False
 ) -> TickResult:
     mode = effective_mode(cfg, dry_run=dry_run, allow_send=allow_send)
     result = TickResult(mode=mode)
