@@ -39,7 +39,16 @@ class DouyinConversation(SQLModel, table=True):
     last_at: datetime | None = None
     last_preview: str | None = None
     unread: int = 0  # 对方发来、index 大于 read_index 的消息数
+    peer_follow_status: int | None = None  # 我是否关注对方（2 = 互相关注）
+    peer_follower_status: int | None = None  # 对方是否关注我
+    # 自动回复已经处理到的消息 index。首次见到会话时设为当前最后一条（基线），不回旧消息
+    handled_index: int | None = None
     updated_at: datetime = Field(default_factory=_now)
+
+    @property
+    def is_mutual(self) -> bool:
+        follow, follower = self.peer_follow_status or 0, self.peer_follower_status or 0
+        return follow == 2 or (follow >= 1 and follower >= 1)
 
 
 class DouyinMessage(SQLModel, table=True):
@@ -95,7 +104,7 @@ def apply(
     """把解析结果写入数据库。返回新消息（按会话、index 排序）和涉及的会话。"""
     batches = list(batches)
     my_uid = next((b.my_uid for b in batches if b.my_uid), None)
-    nicknames = {u.sec_uid: u.nickname for u in users}
+    users_by_sec = {u.sec_uid: u for u in users}
     result = ApplyResult()
     touched: set[str] = set()
 
@@ -147,8 +156,10 @@ def apply(
             conv = s.get(DouyinConversation, conv_id)
             if conv is None:  # 只在消息里出现过的会话
                 conv = DouyinConversation(conv_id=conv_id)
-            if conv.peer_sec_uid and conv.peer_sec_uid in nicknames:
-                conv.name = nicknames[conv.peer_sec_uid]
+            if conv.peer_sec_uid and (user := users_by_sec.get(conv.peer_sec_uid)):
+                conv.name = user.nickname
+                conv.peer_follow_status = user.follow_status
+                conv.peer_follower_status = user.follower_status
             last = s.exec(
                 select(DouyinMessage)
                 .where(DouyinMessage.conv_id == conv_id)
@@ -203,3 +214,53 @@ def list_messages(
             q = q.where(col(DouyinMessage.sent_at) >= _utc(since))
         rows = s.exec(q.order_by(col(DouyinMessage.msg_index).desc()).limit(limit)).all()
     return list(reversed(rows))
+
+
+class DouyinReply(SQLModel, table=True):
+    """每一次回复决策（不管最后有没有发出去）都记一条，作为审计和观察 dry_run 的依据。"""
+
+    __tablename__ = "douyin_replies"
+
+    id: int | None = Field(default=None, primary_key=True)
+    conv_id: str = Field(index=True)
+    trigger_msg_ids: str = "[]"  # 触发这次决策的对方消息
+    trigger_last_index: int | None = None
+    source: str = "auto"  # auto（run）/ manual（douyin reply）
+    should_reply: bool = False
+    text: str | None = None
+    reason: str = ""
+    confidence: float | None = None
+    guard_reasons: str = "[]"  # 护栏拦截原因
+    # dry_run：只生成不发送；blocked：被护栏拦下；skipped：模型决定不回；sent；failed
+    status: str
+    model: str | None = None
+    error: str | None = None
+    run_id: str | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    sent_at: datetime | None = None
+
+
+def save_reply(reply: DouyinReply) -> DouyinReply:
+    with store.session() as s:
+        s.add(reply)
+        s.commit()
+        s.refresh(reply)
+        return reply
+
+
+def sent_replies_since(since: datetime, conv_id: str | None = None) -> list[DouyinReply]:
+    with store.session() as s:
+        q = select(DouyinReply).where(
+            DouyinReply.status == "sent", col(DouyinReply.sent_at) >= since
+        )
+        if conv_id:
+            q = q.where(DouyinReply.conv_id == conv_id)
+        return list(s.exec(q).all())
+
+
+def set_handled(conv_id: str, index: int) -> None:
+    with store.session() as s:
+        if row := s.get(DouyinConversation, conv_id):
+            row.handled_index = max(row.handled_index or 0, index)
+            s.add(row)
+            s.commit()

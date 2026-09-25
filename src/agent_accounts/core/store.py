@@ -11,7 +11,7 @@ from functools import cache
 from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from agent_accounts.core import paths
@@ -74,9 +74,36 @@ def engine() -> Engine:
     n = len(SQLModel.metadata.tables)
     if _created_tables.get(path) != n:
         SQLModel.metadata.create_all(eng)
+        _add_missing_columns(eng)
         path.chmod(0o600)
         _created_tables[path] = n
     return eng
+
+
+def _add_missing_columns(eng: Engine) -> None:
+    """轻量迁移：模型新增的列补到已有表上（只支持加列；新列必须可空或有标量默认值）。"""
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                col_type = col.type.compile(eng.dialect)
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'
+                default = (
+                    col.default.arg if col.default is not None and col.default.is_scalar else None
+                )
+                if default is not None:
+                    literal = int(default) if isinstance(default, bool) else default
+                    ddl += (
+                        f" DEFAULT {literal!r}"
+                        if not isinstance(literal, str)
+                        else f" DEFAULT '{literal}'"
+                    )
+                elif not col.nullable:
+                    raise RuntimeError(f"无法迁移 {table.name}.{col.name}：新列必须可空或有默认值")
+                conn.execute(text(ddl))
 
 
 def session() -> Session:

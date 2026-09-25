@@ -157,3 +157,33 @@ def test_other_validation_errors_do_not_echo_input(isolated_home):
     with pytest.raises(config.ConfigError) as exc:
         config.load()
     assert "12345678" not in str(exc.value)
+
+
+def test_migration_adds_new_columns_to_existing_table(isolated_home):
+    import sqlite3
+
+    paths.ensure_dir(isolated_home)
+    # 模拟旧版本的库：accounts 表缺少 owner / status 列
+    with sqlite3.connect(paths.db_path()) as db:
+        db.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, platform VARCHAR NOT NULL,"
+            " handle VARCHAR, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
+        )
+        db.execute(
+            "INSERT INTO accounts (platform, created_at, updated_at)"
+            " VALUES ('douyin', '2026-09-25 00:00:00', '2026-09-25 00:00:00')"
+        )
+    store._created_tables.clear()
+    account = store.get_account("douyin")
+    assert account.status == "active"  # 补列时带上了默认值
+    assert account.owner is None
+
+
+def test_persona_default_created_private(isolated_home):
+    from agent_accounts.core import persona
+
+    text = persona.load()
+    assert "Echo" in text and "AI" in text
+    assert _mode(persona.path()) == 0o600
+    persona.path().write_text("自定义人设")
+    assert persona.load() == "自定义人设"

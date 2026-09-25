@@ -226,6 +226,9 @@ class ImUser:
     uid: str | None
     sec_uid: str
     nickname: str
+    # 从当前账号的视角：follow_status 我是否关注对方（2 = 互相关注），follower_status 对方是否关注我
+    follow_status: int | None = None
+    follower_status: int | None = None
 
 
 def parse_user_info(data: dict[str, Any]) -> list[ImUser]:
@@ -234,6 +237,12 @@ def parse_user_info(data: dict[str, Any]) -> list[ImUser]:
     for u in data.get("data") or []:
         if sec_uid := u.get("sec_uid"):
             users.append(
-                ImUser(uid=u.get("uid") or None, sec_uid=sec_uid, nickname=u.get("nickname", ""))
+                ImUser(
+                    uid=u.get("uid") or None,
+                    sec_uid=sec_uid,
+                    nickname=u.get("nickname", ""),
+                    follow_status=u.get("follow_status"),
+                    follower_status=u.get("follower_status"),
+                )
             )
     return users

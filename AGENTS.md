@@ -12,6 +12,7 @@
 |---|---|
 | 项目草案（主页） | https://app.notion.com/p/3e522e543e588054b2b7f04eabab5a08 |
 | 抖音适配器：私信 MVP 技术草案（子页面） | https://app.notion.com/p/3e622e543e58817c874bf870bf3f071b |
+| 小红书适配器：私信 MVP 可行性调研与技术草案（子页面） | https://app.notion.com/p/3e622e543e58816e8532c3781b6fc701 |
 
 主页位于 `Plans Center / Echo` 数据库中，带有 `状态`、`进展`、`优先级` 属性。各平台的技术细节放在主页的子页面里，以后新增的平台子页面也要一并读取。
 
