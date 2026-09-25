@@ -82,3 +82,5 @@ class MetadataRecorder:
         with path.open("w", encoding="utf-8") as output:
             for row in self.http:
                 output.write(json.dumps(row, ensure_ascii=False) + "\n")
+            for endpoint in self.websockets:
+                output.write(json.dumps({"transport": "websocket", "endpoint": endpoint}) + "\n")

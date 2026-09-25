@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from agent_accounts.adapters.xiaohongshu.cli import app
 from agent_accounts.adapters.xiaohongshu.doctor import detect_block
+from agent_accounts.adapters.xiaohongshu.login import login
 from agent_accounts.adapters.xiaohongshu.netmeta import MetadataRecorder, endpoint_shape
+from agent_accounts.core import paths
+from agent_accounts.core.config import Config
+from agent_accounts.core.errors import HumanRequired
 
 
-def test_cli_exposes_doctor_subcommand():
-    result = CliRunner().invoke(app, ["doctor", "--help"])
-    assert result.exit_code == 0
-    assert "Usage: " in result.output
-    assert "doctor" in result.output
+def test_cli_exposes_login_and_doctor_subcommands():
+    for command in ("login", "doctor"):
+        result = CliRunner().invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "Usage: " in result.output
+        assert command in result.output
+
+
+async def test_login_rejects_noninteractive_invocation(monkeypatch):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(HumanRequired, match="交互终端"):
+        await login(Config(), None)
+    assert not (paths.home() / "profiles" / "xiaohongshu").exists()
 
 
 def test_endpoint_shape_discards_identifiers_and_query():
@@ -36,13 +49,18 @@ def test_recorder_never_reads_body_or_records_query(tmp_path):
         def body(self):
             raise AssertionError("response body must not be read")
 
+    class WebSocket:
+        url = "wss://www.xiaohongshu.com/api/chat/user-id?token=secret"
+
     recorder = MetadataRecorder()
     recorder.on_response(Response())
+    recorder.on_websocket(WebSocket())
     output = tmp_path / "netmeta.jsonl"
     recorder.save(output)
     data = output.read_text()
     assert "secret" not in data and "user-id" not in data
     assert "application/json" in data and '"size": 42' in data
+    assert '"transport": "websocket"' in data
 
 
 async def test_detect_block_only_when_visible():
