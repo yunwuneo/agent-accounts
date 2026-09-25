@@ -124,12 +124,27 @@ class MediaConfig(BaseModel):
     max_video_seconds: int = 600  # 超过的视频只取前面这段做转写
 
 
+class GuardConfig(BaseModel):
+    """自动回复护栏（Notion 抖音子页面第 7 节）。"""
+
+    only_mutual: bool = True  # 只回互相关注的私聊；陌生人和群聊一律不回
+    allowlist: list[str] = Field(default_factory=list)  # 非空时只回这些会话（conv_id 或昵称）
+    blocklist: list[str] = Field(default_factory=list)  # conv_id 或昵称
+    min_confidence: float = 0.6
+    max_len: int = 120
+    min_interval_s: int = 60  # 同一会话两次发送的最小间隔
+    max_per_hour: int = 20
+    max_per_day: int = 100
+    extra_block_words: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     douyin: DouyinConfig = Field(default_factory=DouyinConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
+    guard: GuardConfig = Field(default_factory=GuardConfig)
 
 
 def _contains_plain_key(data: dict) -> bool:

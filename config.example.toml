@@ -33,3 +33,15 @@ language = "zh"
 max_frames = 10      # 视频最多抽几帧发给模型
 frame_width = 768    # 抽帧缩放宽度
 max_images = 12      # 图集最多用几张
+
+# 自动回复护栏（douyin.auto_reply 为 on 时才会真的发送）
+[guard]
+only_mutual = true       # 只回互相关注的私聊；陌生人、群聊一律不回
+allowlist = []           # 非空时只回这些会话（conv_id 或昵称）
+blocklist = []
+min_confidence = 0.6     # 模型把握低于这个值就不发
+max_len = 120            # 单条回复最大字数
+min_interval_s = 60      # 同一会话两次发送的最小间隔（秒）
+max_per_hour = 20
+max_per_day = 100
+extra_block_words = []   # 额外的禁用词
