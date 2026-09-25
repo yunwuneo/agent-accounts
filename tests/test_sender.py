@@ -25,7 +25,8 @@ PAGE = """
     const b = document.createElement('div');
     b.setAttribute('data-e2e', 'msg-item-content');
     b.innerText = text;
-    document.getElementById('list').appendChild(b);
+    const list = document.getElementById('list');
+    list.insertBefore(b, list.firstChild);  // 真实页面是倒序的：最新消息在最前
     box.innerText = '';
   });
 </script>
@@ -55,7 +56,7 @@ async def test_send_types_clicks_and_verifies(page):
     s = await _setup(page)
     result = await send_text(s, "你好呀", verify_timeout_s=2)
     assert result.ok and not result.retried
-    assert await _bubbles(page) == ["hi", "你好呀"]
+    assert await _bubbles(page) == ["你好呀", "hi"]
 
 
 async def test_retry_once_when_text_still_in_box(page):
@@ -83,4 +84,11 @@ async def test_newlines_are_flattened(page):
     s = await _setup(page)
     result = await send_text(s, "第一行\n第二行", verify_timeout_s=2)
     assert result.ok
-    assert (await _bubbles(page))[-1] == "第一行 第二行"
+    assert (await _bubbles(page))[0] == "第一行 第二行"
+
+
+async def test_same_text_sent_twice_is_detected_by_count(page):
+    s = await _setup(page)
+    assert (await send_text(s, "哈哈", verify_timeout_s=2)).ok
+    assert (await send_text(s, "哈哈", verify_timeout_s=2)).ok
+    assert (await _bubbles(page)).count("哈哈") == 2

@@ -2,7 +2,8 @@
 
 防重复发送是第一原则：
 - 键入前输入框必须为空，键入后内容必须和要发的一致，否则不点发送
-- 校验成功 = 输入框清空 且 出现包含这段文字的新消息气泡
+- 校验成功 = 输入框清空 且（这段文字在聊天区多出现一次 或 发送接口 /v1/message/send 返回成功）。
+  聊天区是倒序的虚拟列表，不能按位置找新气泡（2026-09-25 首次真实发送时踩到）
 - 只有文字仍留在输入框里（确定没发出去）时才重试，且只重新点一次发送，不重新键入
 - 页面上已经出现这段文字就当作已发送
 
@@ -17,13 +18,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from playwright.async_api import Locator, Page, Request
+from playwright.async_api import Locator, Page, Request, Response
 
 from agent_accounts.adapters.douyin import selectors as sel
 from agent_accounts.adapters.douyin.page import ensure_not_blocked
 from agent_accounts.browser.locate import locate
 
 IMAPI_HOST = "imapi.douyin.com"
+SEND_API = "/v1/message/send"
 BUBBLE = '[data-e2e="msg-item-content"]'
 _ZERO_WIDTH = str.maketrans("", "", "​‌‍﻿")
 
@@ -83,14 +85,19 @@ async def open_conversation(s: PageSession, name: str) -> None:
     raise SendError(f"会话列表里找不到「{name}」")
 
 
-async def _wait_sent(page: Page, box: Locator, text: str, before: int, timeout_s: float) -> bool:
+async def _occurrences(page: Page, text: str) -> int:
+    # 聊天区是倒序的（最新在最前），而且是虚拟列表，不能按位置找新气泡；只比较出现次数
+    return sum(text in b for b in await _bubble_texts(page))
+
+
+async def _wait_sent(
+    page: Page, box: Locator, text: str, before: int, api_ok: asyncio.Event, timeout_s: float
+) -> bool:
+    """输入框清空，并且（页面上这段文字多了一次 或 发送接口返回成功）。"""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        bubbles = await _bubble_texts(page)
-        if (
-            not await _input_text(box)
-            and len(bubbles) > before
-            and any(text in b for b in bubbles[before:])
+        if not await _input_text(box) and (
+            api_ok.is_set() or await _occurrences(page, text) > before
         ):
             return True
         await asyncio.sleep(0.3)
@@ -104,12 +111,18 @@ async def send_text(s: PageSession, text: str, *, verify_timeout_s: float = 8.0)
         raise SendError("内容为空")
     page = s.page
     requests: list[str] = []
+    api_ok = asyncio.Event()
 
     def on_request(req: Request) -> None:
         if IMAPI_HOST in req.url:
             requests.append(req.url.split("?")[0].split(IMAPI_HOST, 1)[1])
 
+    def on_response(resp: Response) -> None:
+        if IMAPI_HOST in resp.url and SEND_API in resp.url and resp.ok:
+            api_ok.set()
+
     page.on("request", on_request)
+    page.on("response", on_response)
     try:
         box_hit = await locate(page, sel.THREAD_INPUT)
         send_hit = await locate(page, sel.SEND_BUTTON)
@@ -119,28 +132,27 @@ async def send_text(s: PageSession, text: str, *, verify_timeout_s: float = 8.0)
         if await _input_text(box):
             raise SendError("输入框里已有内容，为避免误发不继续")
 
-        before = len(await _bubble_texts(page))
+        before = await _occurrences(page, text)
         await box.click()
         await s.pause(0.3, 0.8)
         for ch in text:  # 拟人键入速度
             await page.keyboard.type(ch)
             await asyncio.sleep(random.uniform(0.05, 0.16))
         await s.pause(0.4, 1.0)
-        typed = await _input_text(box)
-        if typed != text:
+        if await _input_text(box) != text:
             raise SendError("键入后输入框内容和要发送的不一致，未发送（请人工检查输入框）")
 
         await send_hit.first.click()
-        if await _wait_sent(page, box, text, before, verify_timeout_s):
+        if await _wait_sent(page, box, text, before, api_ok, verify_timeout_s):
             return SendResult(True, "已发送", imapi_requests=requests)
 
-        # 没确认成功：已经出现在页面上就算发送了；文字还在输入框里才重试一次
-        if any(text in b for b in (await _bubble_texts(page))[before:]):
+        # 没确认成功：已有发送证据就算发送了；文字还在输入框里才重试一次
+        if api_ok.is_set() or await _occurrences(page, text) > before:
             return SendResult(True, "已发送（输入框未及时清空）", imapi_requests=requests)
         if await _input_text(box) == text:
             await s.pause(1.0, 2.0)
             await send_hit.first.click()
-            if await _wait_sent(page, box, text, before, verify_timeout_s):
+            if await _wait_sent(page, box, text, before, api_ok, verify_timeout_s):
                 return SendResult(True, "重试后已发送", retried=True, imapi_requests=requests)
             return SendResult(False, "重试一次仍未发送成功", retried=True, imapi_requests=requests)
         return SendResult(
@@ -148,3 +160,4 @@ async def send_text(s: PageSession, text: str, *, verify_timeout_s: float = 8.0)
         )
     finally:
         page.remove_listener("request", on_request)
+        page.remove_listener("response", on_response)
