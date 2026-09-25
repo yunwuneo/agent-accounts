@@ -21,7 +21,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 from agent_accounts.core import paths
 from agent_accounts.core.errors import AgentAccountsError
@@ -45,6 +45,9 @@ class BrowserConfig(BaseModel):
 
 
 class DouyinConfig(BaseModel):
+    # 写错键名（如 auto-reply）时报错，而不是静默回落到默认的 dry_run
+    model_config = ConfigDict(extra="forbid")
+
     base_url: str = "https://www.douyin.com/"
     # 默认保守：新能力先以 dry_run 上线
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"

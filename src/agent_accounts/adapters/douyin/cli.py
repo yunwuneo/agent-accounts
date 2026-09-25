@@ -417,9 +417,11 @@ def _print_outcome(o) -> None:
 @app.command()
 def run(
     once: bool = typer.Option(False, "--once", help="只跑一轮"),
-    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="只生成不发送（默认）"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run/--no-dry-run", help="强制只生成不发送（即使已 --allow-send）"
+    ),
     allow_send: bool = typer.Option(
-        False, "--allow-send", help="M3 期间真正发送的第二道确认（还需 auto_reply = on）"
+        False, "--allow-send", help="真正发送的第二道确认（还需 auto_reply = on）"
     ),
 ) -> None:
     """自动读取 + 回复循环：sync → 新消息 → 决策 → 护栏 → dry_run 或发送。"""
