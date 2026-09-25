@@ -169,7 +169,7 @@ def scrub_user_info(data: dict, s: Scrubber) -> dict:
 
 def main(net_dir: Path) -> None:
     s = Scrubber()
-    rows = [json.loads(line) for line in (net_dir / "http.jsonl").open()]
+    rows = [json.loads(line) for line in (net_dir / "http.jsonl").open(encoding="utf-8")]
     OUT.mkdir(parents=True, exist_ok=True)
     wanted = {
         im.CMD_INIT: "init.pb",
@@ -198,12 +198,14 @@ def main(net_dir: Path) -> None:
     merged: dict[str, dict] = {}
     for row in rows:
         if "/im/user/info/" in row.get("url", "") and row.get("file"):
-            for u in json.loads((net_dir / row["file"]).read_text()).get("data") or []:
+            for u in (
+                json.loads((net_dir / row["file"]).read_text(encoding="utf-8")).get("data") or []
+            ):
                 merged.setdefault(u.get("sec_uid", ""), u)
     if merged:
         path = OUT / "user_info.json"
         data = scrub_user_info({"data": list(merged.values())}, s)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         written.append(path)
 
     # 扫描：任何原始敏感串出现在输出里都算失败
@@ -269,7 +271,12 @@ if __name__ == "__main__":
     if src.suffix == ".json":
         out = OUT / f"{sys.argv[2]}.json"
         out.write_text(
-            json.dumps(scrub_aweme(json.loads(src.read_text())), ensure_ascii=False, indent=1)
+            json.dumps(
+                scrub_aweme(json.loads(src.read_text(encoding="utf-8"))),
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
         )
         print(f"写入 {out}")
     else:

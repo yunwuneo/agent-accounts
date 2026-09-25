@@ -19,7 +19,9 @@ CONV = "0:1:10000001:10000002"
 
 @pytest.fixture
 def conv(isolated_home):
-    users = im.parse_user_info(json.loads((FIXTURES / "user_info.json").read_text()))
+    users = im.parse_user_info(
+        json.loads((FIXTURES / "user_info.json").read_text(encoding="utf-8"))
+    )
     # fixture 里的昵称用户没有关注关系，这里补成互相关注
     users = [
         im.ImUser(u.uid, u.sec_uid, u.nickname, follow_status=2, follower_status=1) for u in users

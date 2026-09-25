@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "douyin"
 
 
 def load(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text())
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 def test_video_picks_smallest_mp4_at_least_720p():

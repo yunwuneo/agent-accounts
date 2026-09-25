@@ -77,7 +77,9 @@ def test_info_list():
 
 
 def test_user_info():
-    users = im.parse_user_info(json.loads((FIXTURES / "user_info.json").read_text()))
+    users = im.parse_user_info(
+        json.loads((FIXTURES / "user_info.json").read_text(encoding="utf-8"))
+    )
     assert "SEC_UID_2" in {u.sec_uid for u in users}
     assert all(u.nickname for u in users)
 

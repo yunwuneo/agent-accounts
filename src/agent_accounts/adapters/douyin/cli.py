@@ -9,12 +9,19 @@ from typing import Any
 import typer
 
 from agent_accounts.adapters.douyin import PLATFORM
-from agent_accounts.core import config
+from agent_accounts.core import config, console
 from agent_accounts.core.config import ConfigError
 from agent_accounts.core.errors import AccountFrozen, HumanRequired
 from agent_accounts.core.run import start_run
 
 app = typer.Typer(help="抖音适配器", no_args_is_help=True)
+
+
+@app.callback()
+def _setup_console() -> None:
+    """输出编码兜底（Windows 管道 / 重定向时 emoji 不会让命令崩溃）。"""
+    console.setup()
+
 
 _MARK = {True: "✅", False: "❌", None: "➖"}
 

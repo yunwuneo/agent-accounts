@@ -5,10 +5,16 @@ from __future__ import annotations
 import typer
 
 from agent_accounts.adapters.douyin.cli import app as douyin_app
-from agent_accounts.core import audit, paths, store
+from agent_accounts.core import audit, console, paths, store
 
 app = typer.Typer(help="Echo agent 的账号与能力框架", no_args_is_help=True)
 app.add_typer(douyin_app, name="douyin")
+
+
+@app.callback()
+def _setup_console() -> None:
+    """输出编码兜底（Windows 管道 / 重定向时 emoji 不会让命令崩溃）。"""
+    console.setup()
 
 
 @app.command()
@@ -45,6 +51,8 @@ def config_init() -> None:
     """从 config.example.toml 生成配置文件（权限 600）；已存在则不覆盖。"""
     from pathlib import Path
 
+    from agent_accounts.core import config
+
     target = paths.config_path()
     if target.exists():
         typer.secho(f"{target} 已存在，不覆盖", fg="yellow")
@@ -53,7 +61,8 @@ def config_init() -> None:
     paths.ensure_dir(target.parent)
     target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
     target.chmod(0o600)
-    typer.secho(f"已生成 {target}（权限 600），请编辑其中的 endpoint / key / model", fg="green")
+    perm = "权限 600" if config.POSIX else "位于当前用户目录，靠 NTFS 权限保护"
+    typer.secho(f"已生成 {target}（{perm}），请编辑其中的 endpoint / key / model", fg="green")
 
 
 @config_app.command("show")

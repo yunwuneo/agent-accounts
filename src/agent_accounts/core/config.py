@@ -18,6 +18,7 @@ import os
 import re
 import stat
 import tomllib
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
@@ -157,15 +158,31 @@ def _contains_plain_key(data: dict) -> bool:
     return False
 
 
+# Windows 的 NTFS 不用 Unix 权限位（stat 总是报 0o666，chmod 也改不掉），权限检查只在 POSIX 上做；
+# Windows 上靠用户目录自带的 ACL 保护，配置文件必须放在当前用户目录下
+POSIX = os.name != "nt"
+
+
+def _check_private(path: Path) -> None:
+    if POSIX:
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise ConfigError(f"{path} 含有 api_key，但权限过宽；请执行 chmod 600 {path}")
+        return
+    try:
+        path.resolve().relative_to(Path.home().resolve())
+    except ValueError:
+        raise ConfigError(f"{path} 含有 api_key，但不在当前用户目录下，其他用户可能读到") from None
+
+
 def load() -> Config:
     path = paths.config_path()
     if not path.exists():
         return Config()
     with path.open("rb") as f:
         data = tomllib.load(f)
-    # 文件里有明文 key 时，权限必须只有本人可读
-    if _contains_plain_key(data) and stat.S_IMODE(path.stat().st_mode) & 0o077:
-        raise ConfigError(f"{path} 含有 api_key，但权限过宽；请执行 chmod 600 {path}")
+    # 文件里有明文 key 时，只能本人可读
+    if _contains_plain_key(data):
+        _check_private(path)
     try:
         return Config.model_validate(data)
     except ValidationError as e:

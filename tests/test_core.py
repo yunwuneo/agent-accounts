@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 
 import pytest
@@ -15,12 +16,18 @@ def _mode(p) -> int:
     return stat.S_IMODE(p.stat().st_mode)
 
 
+# Windows 的 NTFS 不用 Unix 权限位，这些断言只在 macOS / Linux 上有意义
+posix_only = pytest.mark.skipif(os.name == "nt", reason="Windows 不使用 Unix 权限位")
+
+
+@posix_only
 def test_home_respects_env_and_dirs_are_private(isolated_home):
     assert paths.home() == isolated_home
     assert _mode(paths.profile_dir("douyin")) == 0o700
     assert _mode(paths.runs_dir()) == 0o700
 
 
+@posix_only
 def test_db_file_is_private():
     store.get_account("douyin")
     assert _mode(paths.db_path()) == 0o600
@@ -29,7 +36,7 @@ def test_db_file_is_private():
 def test_config_defaults_and_toml(isolated_home):
     assert config.load().douyin.auto_reply == "dry_run"
     paths.ensure_dir(isolated_home)
-    paths.config_path().write_text('[browser]\nheadless = true\nchannel = ""\n')
+    paths.config_path().write_text('[browser]\nheadless = true\nchannel = ""\n', encoding="utf-8")
     cfg = config.load()
     assert cfg.browser.headless is True
     assert cfg.douyin.auto_reply == "dry_run"
@@ -106,7 +113,7 @@ def test_scrub_url_hides_sensitive_query():
 
 def _write_config(home, text: str, mode: int = 0o600):
     paths.ensure_dir(home)
-    paths.config_path().write_text(text)
+    paths.config_path().write_text(text, encoding="utf-8")
     paths.config_path().chmod(mode)
 
 
@@ -129,6 +136,7 @@ def test_llm_endpoints_are_configurable_and_keys_hidden(isolated_home, monkeypat
         assert "sk-secret-123" not in text and "sk-asr" not in text
 
 
+@posix_only
 def test_plain_key_requires_private_file(isolated_home):
     _write_config(isolated_home, '[llm.understand]\napi_key = "sk-x"\nmodel = "m"\n', mode=0o644)
     with pytest.raises(config.ConfigError, match="chmod 600"):
@@ -184,6 +192,35 @@ def test_persona_default_created_private(isolated_home):
 
     text = persona.load()
     assert "Echo" in text and "AI" in text
-    assert _mode(persona.path()) == 0o600
-    persona.path().write_text("自定义人设")
+    if os.name != "nt":
+        assert _mode(persona.path()) == 0o600
+    persona.path().write_text("自定义人设", encoding="utf-8")
     assert persona.load() == "自定义人设"
+
+
+def test_windows_config_check_uses_home_dir_not_mode_bits(isolated_home, monkeypatch):
+    """模拟 Windows：不看权限位（NTFS 下总是 0o666），只要求配置文件在当前用户目录下。"""
+    monkeypatch.setattr(config, "POSIX", False)
+    _write_config(isolated_home, '[llm.understand]\napi_key = "sk-x"\nmodel = "m"\n', mode=0o666)
+    monkeypatch.setattr(config.Path, "home", classmethod(lambda cls: isolated_home.parent))
+    assert config.load().llm.understand.key() == "sk-x"
+
+    monkeypatch.setattr(config.Path, "home", classmethod(lambda cls: isolated_home / "other"))
+    with pytest.raises(config.ConfigError, match="不在当前用户目录下"):
+        config.load()
+
+
+def test_console_setup_survives_gbk_output(monkeypatch):
+    """模拟 Windows 管道输出（GBK）：emoji 不应让命令崩溃，中文照常输出。"""
+    import io
+
+    from agent_accounts.core import console
+
+    buf = io.BytesIO()
+    fake = io.TextIOWrapper(buf, encoding="gbk")
+    monkeypatch.setattr("sys.stdout", fake)
+    monkeypatch.setattr("sys.stderr", io.TextIOWrapper(io.BytesIO(), encoding="gbk"))
+    console.setup()
+    print("✅ 已发送")
+    fake.flush()
+    assert buf.getvalue().decode("gbk") == "? 已发送\n"

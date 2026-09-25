@@ -160,7 +160,9 @@ async def spike_media(cfg: Config, run: RunContext, aweme_id: str, kind: str) ->
             await s.snapshot(run.dir, "media")
             return result
         detail = captured[0][1]
-        (run.dir / "detail.json").write_text(json.dumps(detail, ensure_ascii=False))
+        (run.dir / "detail.json").write_text(
+            json.dumps(detail, ensure_ascii=False), encoding="utf-8"
+        )
         result["detail"] = _summarize_detail(detail)
 
         if kind == "video":

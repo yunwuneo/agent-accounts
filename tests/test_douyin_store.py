@@ -15,7 +15,7 @@ def _batch(name: str) -> im.ImBatch:
 
 
 def _users() -> list[im.ImUser]:
-    return im.parse_user_info(json.loads((FIXTURES / "user_info.json").read_text()))
+    return im.parse_user_info(json.loads((FIXTURES / "user_info.json").read_text(encoding="utf-8")))
 
 
 def test_apply_dedupes_and_fills_conversation():

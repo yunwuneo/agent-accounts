@@ -150,7 +150,9 @@ async def sync_in_session(
         raw_dir = paths.ensure_dir(run.dir / "raw")
         for i, (url, body) in enumerate(collector.bodies):
             (raw_dir / f"{i:03d}-{url.rsplit('/', 1)[-1]}.pb").write_bytes(body)
-        (raw_dir / "user_info.json").write_text(json.dumps(collector.user_info, ensure_ascii=False))
+        (raw_dir / "user_info.json").write_text(
+            json.dumps(collector.user_info, ensure_ascii=False), encoding="utf-8"
+        )
 
     result = SyncResult(source="api", responses=len(collector.bodies))
     batches = []
