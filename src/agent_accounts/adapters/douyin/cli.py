@@ -92,3 +92,21 @@ def spike_net(
         typer.secho(f"产物：{run.dir}", fg="green")
 
     _run(main())
+
+
+@spike_app.command("media")
+def spike_media(
+    aweme_id: str = typer.Argument(..., help="作品 ID（私信分享卡片里的 itemId）"),
+    kind: str = typer.Option("video", help="video 或 note（图集）"),
+) -> None:
+    """Spike-3：拦截作品详情接口，下载媒体并用 ffmpeg 验证（验证完即删除）。"""
+    import json
+
+    from agent_accounts.adapters.douyin.spike import spike_media as do_spike
+
+    async def main() -> None:
+        with start_run(PLATFORM, "spike.media") as run:
+            result = await do_spike(config.load(), run, aweme_id, kind)
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+    _run(main())
