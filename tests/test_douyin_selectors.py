@@ -79,6 +79,33 @@ async def test_data_e2e_preferred(page):
     assert (rows.strategy, rows.count) == ("data-e2e:conversation-item", 1)
 
 
+MSG_INPUT = """
+<div style="position:absolute;top:820px;left:1100px;width:300px;display:flex">
+  <div data-e2e="msg-input" style="display:flex;align-items:center">
+    <div><div data-slate-editor="true" contenteditable="true" style="width:180px">​</div></div>
+    <svg width="32" height="32"></svg>
+    <svg width="36" height="36" class="{send_class}"></svg>
+  </div>
+</div>
+<!-- 右下角悬浮按钮：在输入框右侧、垂直位置相近，不能当成发送按钮 -->
+<button style="position:fixed;left:1390px;top:830px;width:32px;height:32px">☰</button>
+"""
+
+
+async def test_msg_input_and_send_button(page):
+    await page.set_content(MSG_INPUT.format(send_class="publishBtn e2e-send-msg-btn"))
+    assert (await _hit(page, sel.THREAD_INPUT)).strategy == "data-e2e:msg-input"
+    send = await _hit(page, sel.SEND_BUTTON)
+    assert send.strategy == "e2e-class:send-msg-btn"
+
+
+async def test_send_button_geometry_ignores_floating_button(page):
+    await page.set_content(MSG_INPUT.format(send_class=""))
+    send = await _hit(page, sel.SEND_BUTTON)
+    assert send.strategy == "geometry:right-of-input"
+    assert await send.first.get_attribute("width") == "36"
+
+
 async def test_single_conversation_row_geometry(page):
     await page.set_content(
         '<aside style="position:absolute;left:1080px;width:340px">'

@@ -105,11 +105,13 @@ CONVERSATION_ROW = Target(
     ),
 )
 
-# 聊天详情底部的 Draft.js 输入框（Draft.js 的 public-* class 是库自带的，不会被混淆）
+# 聊天详情底部的输入框。2026-09-25 真实页面已是 Slate 编辑器（data-slate-editor），
+# 不再是草案记录的 Draft.js；Draft.js 策略保留作兜底。
 THREAD_INPUT = Target(
     name="thread_input",
-    description="聊天输入框（Draft.js）",
+    description="聊天输入框",
     strategies=(
+        css('[data-e2e="msg-input"] [contenteditable="true"]', name="data-e2e:msg-input"),
         css('.public-DraftEditor-content[contenteditable="true"]', name="css:draftjs"),
         js_mark(
             "thread_input",
@@ -124,19 +126,25 @@ THREAD_INPUT = Target(
     ),
 )
 
-# 输入框右侧的发送按钮（红色圆形上箭头）：与输入框垂直居中对齐、近似正方形、位于其右侧
+# 输入框右侧的发送按钮（红色圆形上箭头），带专用的 e2e class。
+# 几何兜底必须限制在输入区容器内：页面右下角有一个悬浮按钮，位置上也在输入框右侧，
+# 不加限制会被误认成发送按钮（2026-09-25 doctor 实际踩到过）。
 SEND_BUTTON = Target(
     name="send_button",
     description="发送按钮",
     strategies=(
+        css('[data-e2e="msg-input"] .e2e-send-msg-btn', name="e2e-class:send-msg-btn"),
         js_mark(
             "send_button",
             """
             const input = document.querySelector('[contenteditable="true"]');
             if (!input) return null;
+            const box = input.closest('[data-e2e="msg-input"]')
+                || input.parentElement?.parentElement?.parentElement;
+            if (!box) return null;
             const ir = input.getBoundingClientRect();
             const cy = ir.top + ir.height / 2;
-            const cands = [...document.querySelectorAll('button, svg, div, span')].filter(el => {
+            const cands = [...box.querySelectorAll('button, svg, div, span')].filter(el => {
                 const r = el.getBoundingClientRect();
                 const sq = r.width >= 20 && r.width <= 56 && Math.abs(r.width - r.height) <= 6;
                 return sq && r.left >= ir.right - 8 && Math.abs(r.top + r.height / 2 - cy) < 40;
