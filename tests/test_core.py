@@ -217,7 +217,7 @@ def test_console_setup_survives_gbk_output(monkeypatch):
     from agent_accounts.core import console
 
     buf = io.BytesIO()
-    fake = io.TextIOWrapper(buf, encoding="gbk")
+    fake = io.TextIOWrapper(buf, encoding="gbk", newline="\n")  # Windows 默认会写成 \r\n
     monkeypatch.setattr("sys.stdout", fake)
     monkeypatch.setattr("sys.stderr", io.TextIOWrapper(io.BytesIO(), encoding="gbk"))
     console.setup()
