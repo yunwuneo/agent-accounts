@@ -82,3 +82,12 @@ def test_frozen_account_refuses_runs():
     store.set_account_status("douyin", "active")
     with start_run("douyin", "doctor"):
         pass
+
+
+def test_scrub_url_hides_sensitive_query():
+    from agent_accounts.browser.netlog import scrub_url
+
+    url = "wss://x.test/ws/v2?aid=6383&access_key=abc&device_id=1&msToken=t&a_bogus=b&x=ok"
+    assert scrub_url(url) == (
+        "wss://x.test/ws/v2?aid=6383&access_key=***&device_id=***&msToken=***&a_bogus=***&x=ok"
+    )

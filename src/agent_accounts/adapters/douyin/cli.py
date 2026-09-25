@@ -69,3 +69,26 @@ def doctor(
 
     if not _run(main()):
         raise typer.Exit(1)
+
+
+spike_app = typer.Typer(help="M0 Spike 探查脚本（产物在 runs/<id>/）", no_args_is_help=True)
+app.add_typer(spike_app, name="spike")
+
+
+@spike_app.command("net")
+def spike_net(
+    conv: int = typer.Option(0, help="点进第几个会话（从 0 开始，会标记已读）"),
+    scrolls: int = typer.Option(3, help="向上翻历史的次数"),
+) -> None:
+    """Spike-2：录制私信相关的接口和 WebSocket 帧。"""
+    import json
+
+    from agent_accounts.adapters.douyin.spike import spike_net as do_spike
+
+    async def main() -> None:
+        with start_run(PLATFORM, "spike.net") as run:
+            summary = await do_spike(config.load(), run, conv_index=conv, scrolls=scrolls)
+        typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+        typer.secho(f"产物：{run.dir}", fg="green")
+
+    _run(main())
