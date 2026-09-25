@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "sec_uid": "SEC_UID_3",
+      "nickname": "昵称49",
+      "uid": "10000003"
+    },
+    {
+      "sec_uid": "SEC_UID_1",
+      "nickname": "昵称50",
+      "uid": "10000001"
+    },
+    {
+      "sec_uid": "SEC_UID_2",
+      "nickname": "昵称51",
+      "uid": "10000002"
+    }
+  ],
+  "status_code": 0
+}
