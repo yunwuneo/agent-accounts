@@ -88,3 +88,23 @@ def config_show() -> None:
         typer.echo(
             f"[{name}] model={info['model']}  base_url={info['base_url']}  key={info['key']}"
         )
+    typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
+
+
+@app.command("alert-test")
+def alert_test() -> None:
+    """向配置的告警 webhook 发一条测试告警（不论 min_level）。"""
+    from agent_accounts.core import alerts, config
+
+    try:
+        cfg = config.load()
+    except config.ConfigError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(1) from None
+    if not cfg.alerts.url():
+        typer.secho(f"告警 webhook {cfg.alerts.describe()}", fg="yellow", err=True)
+        raise typer.Exit(1)
+    ok = alerts.send_webhook("agent-accounts", "critical", "这是一条测试告警", None)
+    if not ok:
+        raise typer.Exit(1)
+    typer.secho("测试告警已发送", fg="green")

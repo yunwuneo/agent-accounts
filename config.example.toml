@@ -29,6 +29,13 @@ api_key = "sk-..."
 model = "whisper-1"
 language = "zh"
 
+# 告警 webhook（可选）：验证码 / 风控冻结 / 登录失效 / 发送失败时 POST 一份 JSON
+# {platform, level, message, run_id, time, text}；URL 常带 token，按密钥对待
+# 配好后用 agent-accounts alert-test 发一条测试告警
+[alerts]
+# webhook_url = "https://example.com/hook/..."   # 或改用 webhook_url_env = "AGENT_ALERT_WEBHOOK"
+min_level = "warning"    # info / warning / critical
+
 [media]
 max_frames = 10      # 视频最多抽几帧发给模型
 frame_width = 768    # 抽帧缩放宽度

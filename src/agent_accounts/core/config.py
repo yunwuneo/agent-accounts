@@ -146,6 +146,44 @@ class GuardConfig(BaseModel):
     extra_block_words: list[str] = Field(default_factory=list)
 
 
+class AlertsConfig(BaseModel):
+    """告警 webhook：POST JSON {platform, level, message, run_id, time, text}。
+
+    webhook URL 里常带 token，按密钥处理：可写 ``webhook_url``（文件须私有），
+    也可写 ``webhook_url_env`` 指定环境变量名；日志和 ``config show`` 里都不显示。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    webhook_url: SecretStr | None = None
+    webhook_url_env: str | None = None
+    min_level: Literal["info", "warning", "critical"] = "warning"
+    timeout_s: float = 5
+
+    @field_validator("webhook_url_env")
+    @classmethod
+    def _env_name(cls, v: str | None) -> str | None:
+        if v is not None and not _ENV_NAME.fullmatch(v):
+            raise ValueError("webhook_url_env 应该是环境变量名；URL 本身请写在 webhook_url")
+        return v
+
+    def url(self) -> str | None:
+        if self.webhook_url is not None:
+            return self.webhook_url.get_secret_value()
+        if self.webhook_url_env:
+            return os.environ.get(self.webhook_url_env) or None
+        return None
+
+    def describe(self) -> str:
+        if self.webhook_url is not None:
+            source = "webhook_url"
+        elif self.webhook_url_env:
+            source = f"${self.webhook_url_env}"
+        else:
+            return "未配置（只输出到终端和审计日志）"
+        return f"{source}（{'已设置' if self.url() else '未设置'}），min_level={self.min_level}"
+
+
 class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     douyin: DouyinConfig = Field(default_factory=DouyinConfig)
@@ -153,11 +191,15 @@ class Config(BaseModel):
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     guard: GuardConfig = Field(default_factory=GuardConfig)
+    alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+
+
+_PLAIN_SECRETS = {"api_key", "webhook_url"}
 
 
 def _contains_plain_key(data: dict) -> bool:
     if isinstance(data, dict):
-        return any(k == "api_key" or _contains_plain_key(v) for k, v in data.items())
+        return any(k in _PLAIN_SECRETS or _contains_plain_key(v) for k, v in data.items())
     return False
 
 
@@ -169,12 +211,12 @@ POSIX = os.name != "nt"
 def _check_private(path: Path) -> None:
     if POSIX:
         if stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise ConfigError(f"{path} 含有 api_key，但权限过宽；请执行 chmod 600 {path}")
+            raise ConfigError(f"{path} 含有明文密钥，但权限过宽；请执行 chmod 600 {path}")
         return
     try:
         path.resolve().relative_to(Path.home().resolve())
     except ValueError:
-        raise ConfigError(f"{path} 含有 api_key，但不在当前用户目录下，其他用户可能读到") from None
+        raise ConfigError(f"{path} 含有明文密钥，但不在当前用户目录下，其他用户可能读到") from None
 
 
 def load() -> Config:
