@@ -62,8 +62,16 @@ def start_run(platform: str, command: str, *, require_active: bool = True) -> It
     try:
         yield ctx
     except HumanRequired as e:
-        ctx.alert("critical", f"需要人工介入：{e}")
         _finish(ctx.id, "blocked", str(e))
+        if e.freeze:
+            store.set_account_status(platform, "frozen")
+            ctx.audit("account.auto_freeze", reason=str(e))
+            ctx.alert(
+                "critical",
+                f"需要人工介入：{e}。账号已自动冻结，处理后运行 agent-accounts unfreeze {platform}",
+            )
+        else:
+            ctx.alert("critical", f"需要人工介入：{e}")
         raise
     except BaseException as e:
         _finish(ctx.id, "failed", f"{type(e).__name__}: {e}")

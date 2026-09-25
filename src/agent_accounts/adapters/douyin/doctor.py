@@ -62,7 +62,7 @@ async def _run_checks(s: BrowserSession, cfg: Config, checks: list[Check], open_
 
     if reason := await detect_block(s.page):
         checks.append(Check("风控/验证", False, reason))
-        raise HumanRequired("触发平台验证或风控", reason)
+        raise HumanRequired("触发平台验证或风控", reason, freeze=True)
     checks.append(Check("风控/验证", True, "未发现"))
 
     state = await login_state(s)
@@ -88,7 +88,7 @@ async def _run_checks(s: BrowserSession, cfg: Config, checks: list[Check], open_
     await s.op(open_panel)
     if reason := await detect_block(s.page):
         checks.append(Check("风控/验证", False, reason))
-        raise HumanRequired("触发平台验证或风控", reason)
+        raise HumanRequired("触发平台验证或风控", reason, freeze=True)
 
     panel = await locate(s.page, sel.MESSAGES_PANEL)
     checks.append(_hit_check(sel.MESSAGES_PANEL, panel))

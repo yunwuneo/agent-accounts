@@ -25,11 +25,16 @@ from agent_accounts.core.run import RunContext
 
 
 async def spike_net(
-    cfg: Config, run: RunContext, *, conv_index: int = 0, scrolls: int = 3
+    cfg: Config,
+    run: RunContext,
+    *,
+    conv_index: int = 0,
+    scrolls: int = 3,
+    headless: bool | None = None,
 ) -> dict[str, Any]:
     """Spike-2。会点进第 ``conv_index`` 个会话（会标记已读），不输入、不发送。"""
     recorder = NetRecorder(run.dir / "net")
-    async with BrowserSession(PLATFORM, cfg.browser) as s:
+    async with BrowserSession(PLATFORM, cfg.browser, headless=headless) as s:
         recorder.attach(s.page)
         try:
             await open_home(s, cfg.douyin.base_url)

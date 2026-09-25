@@ -66,10 +66,21 @@ def test_run_status_ok_failed_blocked():
         raise ValueError("boom")
     assert _run_row(run.id).status == "failed"
 
+    with pytest.raises(HumanRequired), start_run("douyin", "not-logged-in") as run:
+        raise HumanRequired("未登录")
+    assert _run_row(run.id).status == "blocked"
+    assert store.get_account("douyin").status == "active"  # 未登录不冻结
+
+
+def test_risk_control_auto_freezes_account():
     with pytest.raises(HumanRequired), start_run("douyin", "captcha") as run:
-        raise HumanRequired("触发平台验证或风控", "安全验证")
+        raise HumanRequired("触发平台验证或风控", "安全验证", freeze=True)
     row = _run_row(run.id)
     assert row.status == "blocked" and "安全验证" in row.error
+    assert store.get_account("douyin").status == "frozen"
+    # 冻结后下一次自动运行直接被拒绝，直到人工解冻
+    with pytest.raises(AccountFrozen), start_run("douyin", "doctor"):
+        pass
 
 
 def test_frozen_account_refuses_runs():

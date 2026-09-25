@@ -62,4 +62,4 @@ async def detect_block(page: Page) -> str | None:
 
 async def ensure_not_blocked(page: Page) -> None:
     if reason := await detect_block(page):
-        raise HumanRequired("触发平台验证或风控", reason)
+        raise HumanRequired("触发平台验证或风控", reason, freeze=True)

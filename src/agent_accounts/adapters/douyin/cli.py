@@ -79,6 +79,7 @@ app.add_typer(spike_app, name="spike")
 def spike_net(
     conv: int = typer.Option(0, help="点进第几个会话（从 0 开始，会标记已读）"),
     scrolls: int = typer.Option(3, help="向上翻历史的次数"),
+    headless: bool | None = typer.Option(None, "--headless/--headed", help="覆盖配置"),
 ) -> None:
     """Spike-2：录制私信相关的接口和 WebSocket 帧。"""
     import json
@@ -87,7 +88,9 @@ def spike_net(
 
     async def main() -> None:
         with start_run(PLATFORM, "spike.net") as run:
-            summary = await do_spike(config.load(), run, conv_index=conv, scrolls=scrolls)
+            summary = await do_spike(
+                config.load(), run, conv_index=conv, scrolls=scrolls, headless=headless
+            )
         typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
         typer.secho(f"产物：{run.dir}", fg="green")
 
