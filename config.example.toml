@@ -13,7 +13,7 @@ auto_reply = "dry_run"   # on / off / dry_run
 base_url = "https://api.anthropic.com"   # 自定义 endpoint；兼容 Anthropic Messages 的代理也可以
 api_key = "sk-ant-..."                   # 或者删掉这行，改用 api_key_env = "ANTHROPIC_API_KEY"
 model = "claude-sonnet-5"
-max_tokens = 4096
+max_tokens = 8000
 structured_output = true                 # 代理不支持 output_config 时改成 false
 
 # ③ 回复生成（M3 才用）：Anthropic Messages 格式

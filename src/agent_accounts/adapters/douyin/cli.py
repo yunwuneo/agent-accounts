@@ -254,3 +254,94 @@ def thread(
         who = "我" if m.from_me else "对方"
         extra = f"  aweme_id={m.aweme_id}" if m.aweme_id else ""
         typer.echo(f"{_local(m.sent_at)} {who}：{m.preview()}{extra}")
+
+
+def _digest_json(d) -> dict:
+    return {
+        "aweme_id": d.item_id,
+        "kind": d.kind,
+        "available": d.available,
+        "filter_reason": d.filter_reason,
+        "title": d.title,
+        "author": d.author,
+        "hashtags": d.hashtags,
+        "duration_s": d.duration_s,
+        "music_title": d.music_title,
+        "transcript": d.transcript,
+        "summary": d.summary,
+        "vibe": d.vibe,
+        "reply_hooks": d.reply_hooks,
+        "frames_used": d.frames_used,
+        "model": d.model,
+        "notes": d.notes,
+    }
+
+
+@app.command()
+def digest(
+    targets: list[str] = typer.Argument(None, help="作品 ID 或 douyin.com/video|note/<id> 链接"),  # noqa: B008
+    pending: bool = typer.Option(False, help="处理私信里对方分享过、还没有摘要的作品"),
+    limit: int = typer.Option(5, help="--pending 时最多处理几个"),
+    force: bool = typer.Option(False, help="忽略缓存重新分析"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """理解分享的视频/图集，生成摘要（结果按作品缓存）。"""
+    import json
+
+    from agent_accounts.adapters.douyin import digest as ddigest
+
+    kinds: dict = {}
+    ids: list[str] = []
+    for t in targets or []:
+        try:
+            aweme_id, kind = ddigest.parse_target(t)
+        except ValueError as e:
+            typer.secho(str(e), fg="red", err=True)
+            raise typer.Exit(1) from None
+        ids.append(aweme_id)
+        if kind:
+            kinds[aweme_id] = kind
+    if pending:
+        ids += [i for i in ddigest.pending_items(limit) if i not in ids]
+    if not ids:
+        typer.echo("没有需要处理的作品")
+        return
+
+    async def main() -> list:
+        with start_run(PLATFORM, "digest") as run:
+            return await ddigest.digest_items(config.load(), run, ids, force=force, kinds=kinds)
+
+    outcomes = _run(main())
+    if as_json:
+        typer.echo(
+            json.dumps(
+                [
+                    {"aweme_id": o.aweme_id, "cached": o.cached, "error": o.error}
+                    | ({"digest": _digest_json(o.digest)} if o.digest else {})
+                    for o in outcomes
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    for o in outcomes:
+        if o.error:
+            typer.secho(f"❌ {o.aweme_id}：{o.error}", fg="red")
+            continue
+        d = o.digest
+        tag = "（缓存）" if o.cached else ""
+        kind = "视频" if d.kind == "video" else "图集"
+        typer.secho(f"\n[{kind}] {d.aweme_id}{tag}  {d.author}", bold=True)
+        if d.title:
+            typer.echo(f"标题：{' '.join(d.title.split())[:80]}")
+        typer.echo(f"摘要：{d.summary}")
+        typer.echo(f"氛围：{d.vibe}")
+        for h in d.reply_hooks:
+            typer.echo(f"  · {h}")
+        extra = [f"{d.frames_used} 张图", f"转写 {len(d.transcript or '')} 字", d.model]
+        typer.echo("（" + "，".join(extra) + "）")
+        for n in d.notes:
+            typer.secho(f"  ⚠️ {n}", fg="yellow")
+    if any(o.error for o in outcomes):
+        raise typer.Exit(1)

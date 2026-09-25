@@ -83,7 +83,7 @@ class Endpoint(BaseModel):
 class LLMEndpoint(Endpoint):
     """Anthropic Messages 格式的模型。"""
 
-    max_tokens: int = 4096
+    max_tokens: int = 8000  # 含自适应思考的 token
     # 部分兼容代理不支持 output_config 结构化输出；关掉后改用 prompt 要求 JSON、本地校验
     structured_output: bool = True
     timeout_s: float = 120
