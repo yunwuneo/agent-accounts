@@ -1,0 +1,35 @@
+# 复制到 ~/.agent-accounts/config.toml 后修改，并执行 chmod 600 ~/.agent-accounts/config.toml
+# 所有字段都可以省略，省略时用默认值。
+
+[browser]
+channel = "chrome"   # 本机 Google Chrome；留空用 Playwright 自带的 Chromium
+headless = false     # 抖音在 headless 下会触发验证码（Spike-4），不要打开
+
+[douyin]
+auto_reply = "dry_run"   # on / off / dry_run
+
+# ① 媒体理解：Anthropic Messages 格式（/v1/messages），模型必须支持图片输入
+[llm.understand]
+base_url = "https://api.anthropic.com"   # 自定义 endpoint；兼容 Anthropic Messages 的代理也可以
+api_key = "sk-ant-..."                   # 或者删掉这行，改用 api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-5"
+max_tokens = 4096
+structured_output = true                 # 代理不支持 output_config 时改成 false
+
+# ③ 回复生成（M3 才用）：Anthropic Messages 格式
+[llm.reply]
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-5"
+
+# ② 语音转写：OpenAI 兼容的 /v1/audio/transcriptions
+[transcribe]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-..."
+model = "whisper-1"
+language = "zh"
+
+[media]
+max_frames = 10      # 视频最多抽几帧发给模型
+frame_width = 768    # 抽帧缩放宽度
+max_images = 12      # 图集最多用几张

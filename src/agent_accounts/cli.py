@@ -34,3 +34,47 @@ def unfreeze(platform: str = typer.Argument(...)) -> None:
     store.set_account_status(platform, "active")
     audit.record(platform, "account.unfreeze")
     typer.secho(f"✅ {platform} 已恢复", fg="green")
+
+
+config_app = typer.Typer(help="配置（~/.agent-accounts/config.toml）", no_args_is_help=True)
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("init")
+def config_init() -> None:
+    """从 config.example.toml 生成配置文件（权限 600）；已存在则不覆盖。"""
+    from pathlib import Path
+
+    target = paths.config_path()
+    if target.exists():
+        typer.secho(f"{target} 已存在，不覆盖", fg="yellow")
+        raise typer.Exit(1)
+    example = Path(__file__).resolve().parents[2] / "config.example.toml"
+    paths.ensure_dir(target.parent)
+    target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    target.chmod(0o600)
+    typer.secho(f"已生成 {target}（权限 600），请编辑其中的 endpoint / key / model", fg="green")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """显示当前生效的模型配置（key 只显示是否已设置）。"""
+    from agent_accounts.core import config
+
+    try:
+        cfg = config.load()
+    except config.ConfigError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(1) from None
+    path = paths.config_path()
+    typer.echo(f"配置文件：{path}{'' if path.exists() else '（不存在，使用默认值）'}")
+    sections = {
+        "llm.understand（媒体理解）": cfg.llm.understand,
+        "llm.reply（回复生成）": cfg.llm.reply,
+        "transcribe（语音转写）": cfg.transcribe,
+    }
+    for name, ep in sections.items():
+        info = ep.redacted()
+        typer.echo(
+            f"[{name}] model={info['model']}  base_url={info['base_url']}  key={info['key']}"
+        )

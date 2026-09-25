@@ -10,6 +10,7 @@ import typer
 
 from agent_accounts.adapters.douyin import PLATFORM
 from agent_accounts.core import config
+from agent_accounts.core.config import ConfigError
 from agent_accounts.core.errors import AccountFrozen, HumanRequired
 from agent_accounts.core.run import start_run
 
@@ -27,6 +28,9 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
     except HumanRequired as e:
         typer.secho(f"🛑 需要人工介入：{e}", fg="red", err=True)
         raise typer.Exit(2) from None
+    except ConfigError as e:
+        typer.secho(f"⚙️ 配置错误：{e}", fg="red", err=True)
+        raise typer.Exit(4) from None
 
 
 @app.command()

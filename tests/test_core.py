@@ -102,3 +102,41 @@ def test_scrub_url_hides_sensitive_query():
     assert scrub_url(url) == (
         "wss://x.test/ws/v2?aid=6383&access_key=***&device_id=***&msToken=***&a_bogus=***&x=ok"
     )
+
+
+def _write_config(home, text: str, mode: int = 0o600):
+    paths.ensure_dir(home)
+    paths.config_path().write_text(text)
+    paths.config_path().chmod(mode)
+
+
+def test_llm_endpoints_are_configurable_and_keys_hidden(isolated_home, monkeypatch):
+    _write_config(
+        isolated_home,
+        '[llm.understand]\nbase_url = "https://proxy.test"\napi_key = "sk-secret-123"\n'
+        'model = "m-vision"\n[llm.reply]\napi_key_env = "MY_REPLY_KEY"\nmodel = "m-chat"\n'
+        '[transcribe]\nbase_url = "https://asr.test/v1"\napi_key = "sk-asr"\nmodel = "asr-1"\n',
+    )
+    monkeypatch.setenv("MY_REPLY_KEY", "sk-from-env")
+    cfg = config.load()
+    assert cfg.llm.understand.model == "m-vision"
+    assert cfg.llm.understand.base_url == "https://proxy.test"
+    assert cfg.llm.understand.key() == "sk-secret-123"
+    assert cfg.llm.reply.key() == "sk-from-env"
+    assert cfg.transcribe.model == "asr-1"
+    # 打印配置对象、脱敏视图都不能出现明文 key
+    for text in (repr(cfg), str(cfg.llm.understand.redacted()), cfg.model_dump_json()):
+        assert "sk-secret-123" not in text and "sk-asr" not in text
+
+
+def test_plain_key_requires_private_file(isolated_home):
+    _write_config(isolated_home, '[llm.understand]\napi_key = "sk-x"\nmodel = "m"\n', mode=0o644)
+    with pytest.raises(config.ConfigError, match="chmod 600"):
+        config.load()
+
+
+def test_missing_key_error_names_section(isolated_home, monkeypatch):
+    monkeypatch.delenv("NOPE_KEY", raising=False)
+    _write_config(isolated_home, '[llm.understand]\napi_key_env = "NOPE_KEY"\nmodel = "m"\n')
+    with pytest.raises(config.ConfigError, match="llm.understand"):
+        config.load().llm.understand.require_key("llm.understand")
