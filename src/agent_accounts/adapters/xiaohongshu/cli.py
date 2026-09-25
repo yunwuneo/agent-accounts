@@ -41,7 +41,7 @@ def login(timeout: int = typer.Option(300, min=1, help="等待人工登录的最
     from agent_accounts.adapters.xiaohongshu.login import login as handoff
 
     async def run_login() -> None:
-        with start_run(PLATFORM, "login", require_active=False) as run:
+        with start_run(PLATFORM, "login") as run:
             await handoff(config.load(), run, timeout_s=timeout)
         typer.echo("浏览器会话已保存；登录态仍需由 xiaohongshu doctor 验收。")
 

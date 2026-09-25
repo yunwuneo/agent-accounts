@@ -9,7 +9,7 @@ from agent_accounts.adapters.xiaohongshu.cli import app
 from agent_accounts.adapters.xiaohongshu.doctor import detect_block
 from agent_accounts.adapters.xiaohongshu.login import login
 from agent_accounts.adapters.xiaohongshu.netmeta import MetadataRecorder, endpoint_shape
-from agent_accounts.core import paths
+from agent_accounts.core import paths, store
 from agent_accounts.core.config import Config
 from agent_accounts.core.errors import HumanRequired
 
@@ -26,6 +26,13 @@ async def test_login_rejects_noninteractive_invocation(monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     with pytest.raises(HumanRequired, match="交互终端"):
         await login(Config(), None)
+    assert not (paths.home() / "profiles" / "xiaohongshu").exists()
+
+
+def test_login_respects_frozen_account():
+    store.set_account_status("xiaohongshu", "frozen")
+    result = CliRunner().invoke(app, ["login"])
+    assert result.exit_code == 3
     assert not (paths.home() / "profiles" / "xiaohongshu").exists()
 
 

@@ -345,3 +345,39 @@ def digest(
             typer.secho(f"  ⚠️ {n}", fg="yellow")
     if any(o.error for o in outcomes):
         raise typer.Exit(1)
+
+
+@app.command()
+def reply(
+    conv: str = typer.Argument(..., help="conv_id 或对方昵称"),
+    text: str = typer.Option(..., "--text", help="要发送的内容"),
+    yes: bool = typer.Option(False, "--yes", help="不再确认，直接发送"),
+) -> None:
+    """手动发送一条私信（会点进会话、标记已读；内容和频率仍受护栏限制）。"""
+    import json
+
+    from agent_accounts.adapters.douyin import store as dstore
+    from agent_accounts.adapters.douyin.replying import manual_reply
+
+    row = dstore.find_conversation(conv)
+    if row is None:
+        typer.secho(f"找不到会话：{conv}（先运行 douyin sync）", fg="red", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"发送给「{row.name or row.conv_id}」：{text}")
+    if not yes and not typer.confirm("确认发送？"):
+        raise typer.Exit(1)
+
+    async def main():
+        with start_run(PLATFORM, "reply") as run:
+            return await manual_reply(config.load(), run, row, text)
+
+    r = _run(main())
+    reasons = json.loads(r.guard_reasons)
+    if r.status == "blocked":
+        typer.secho(f"🛡️ 被护栏拦下：{'；'.join(reasons)}", fg="yellow")
+        raise typer.Exit(1)
+    if r.status == "sent":
+        typer.secho("✅ 已发送", fg="green")
+    else:
+        typer.secho(f"❌ 发送失败：{r.error}", fg="red")
+        raise typer.Exit(1)
