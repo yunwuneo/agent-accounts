@@ -1,10 +1,12 @@
 """抖音网页版的选择器集中配置。
 
-页面改版时只需要改这里。每个目标按「文本/role → 几何 → 稳定 class」的顺序给多种策略。
+页面改版时只需要改这里。每个目标按「data-e2e → 文本 → 几何」的顺序给多种策略。
+抖音给关键元素打了 ``data-e2e`` 测试属性（2026-09-25 在真实页面确认：im-entry、im-dialog、
+conversation-item），这是最稳定的定位方式；文本和几何策略作为改版时的兜底。
 几何策略参考本机 douyin-messager skill 的经验：顶栏在页面最上方约 80px 内，
 私信面板从右侧弹出，会话行是面板内重复出现的、带头像的多行条目。
 
-⚠️ 以下策略基于 2026-09-25 手动跑通时的观察，需要用 ``douyin doctor`` 在真实页面上校准。
+改完之后必须用 ``douyin doctor`` 在真实页面上验证。
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ MESSAGES_ENTRY = Target(
     name="messages_entry",
     description="顶栏「消息」入口",
     strategies=(
+        css('[data-e2e="im-entry"]', name="data-e2e:im-entry"),
         js_mark(
             "messages_entry",
             f"""
@@ -65,18 +68,21 @@ LOGIN_BUTTON = Target(
 # 右侧弹出的私信面板，标题形如「消息（N）」
 MESSAGES_PANEL = Target(
     name="messages_panel",
-    description="私信面板标题「消息（N）」",
+    description="私信面板",
     strategies=(
+        css('[data-e2e="im-dialog"]', name="data-e2e:im-dialog"),
         text(re.compile(r"^(消息|私信)\s*[（(]\d+[)）]$"), name="text:消息（N）"),
         text("暂时没有更多了", name="text:列表底部"),
     ),
 )
 
-# 面板里的会话行：右半屏、高度 50–100px、含头像图片、至少两行文本，且重复出现
+# 面板里的会话行（虚拟列表，每行外层带 data-index）。
+# 几何兜底：右半屏、高度 50–100px、含头像图片、2–6 行文本
 CONVERSATION_ROW = Target(
     name="conversation_row",
     description="私信面板里的会话行",
     strategies=(
+        css('[data-e2e="conversation-item"]', name="data-e2e:conversation-item"),
         js_mark(
             "conversation_row",
             """
@@ -89,15 +95,12 @@ CONVERSATION_ROW = Target(
                 const lines = (el.innerText || '').split('\\n').filter(s => s.trim());
                 return lines.length >= 2 && lines.length <= 6;
             };
-            // 找到拥有 ≥2 个符合条件的直接子元素的容器，这些子元素就是会话行
-            let best = [];
-            for (const box of document.querySelectorAll('body *')) {
-                const rows = [...box.children].filter(ok);
-                if (rows.length > best.length) best = rows;
-            }
-            return best.length >= 2 ? best : null;
+            // 取最内层的符合条件的元素（会话可能只有一个，不能要求重复出现）
+            const rows = [...document.querySelectorAll('body *')].filter(ok);
+            const inner = rows.filter(el => !rows.some(o => o !== el && el.contains(o)));
+            return inner.length ? inner : null;
             """,
-            name="geometry:repeated-rows",
+            name="geometry:rows",
         ),
     ),
 )

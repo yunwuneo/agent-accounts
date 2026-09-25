@@ -48,7 +48,11 @@ async def detect_block(page: Page) -> str | None:
     if sel.BLOCK_URL_PATTERN.search(page.url):
         return f"页面跳转到了验证页：{page.url.split('?')[0]}"
     for frame in page.frames:
-        if frame is not page.main_frame and sel.BLOCK_URL_PATTERN.search(frame.url):
+        if frame is page.main_frame or not sel.BLOCK_URL_PATTERN.search(frame.url):
+            continue
+        # 页面常驻一个 display:none 的 rc-verifycenter/nocaptcha iframe，只有显示出来才算弹窗
+        element = await frame.frame_element()
+        if await element.is_visible():
             return "页面中出现了验证码弹窗"
     loc = page.get_by_text(sel.BLOCK_TEXT_PATTERN)
     if await loc.count() and await loc.first.is_visible():

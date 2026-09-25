@@ -66,6 +66,29 @@ async def test_all_targets_on_synthetic_page(page):
     assert await locate(page, sel.LOGIN_BUTTON, timeout_ms=300) is None
 
 
+async def test_data_e2e_preferred(page):
+    # 结构摘自 2026-09-25 真实页面（内容已替换）
+    await page.set_content(
+        '<div data-e2e="im-entry" style="margin-left:1300px">消息</div>'
+        '<div data-e2e="im-dialog"><div data-index="0">'
+        '<div data-e2e="conversation-item">某人 hi</div></div></div>'
+    )
+    assert (await _hit(page, sel.MESSAGES_ENTRY)).strategy == "data-e2e:im-entry"
+    assert (await _hit(page, sel.MESSAGES_PANEL)).strategy == "data-e2e:im-dialog"
+    rows = await _hit(page, sel.CONVERSATION_ROW)
+    assert (rows.strategy, rows.count) == ("data-e2e:conversation-item", 1)
+
+
+async def test_single_conversation_row_geometry(page):
+    await page.set_content(
+        '<aside style="position:absolute;left:1080px;width:340px">'
+        + ROW.format(name="小明", preview="hi")
+        + "</aside>"
+    )
+    rows = await _hit(page, sel.CONVERSATION_ROW)
+    assert (rows.strategy, rows.count) == ("geometry:rows", 1)
+
+
 async def test_login_button_in_top_bar(page):
     await page.set_content(
         '<header style="height:60px"><button style="margin-left:1200px">登录</button></header>'
@@ -78,6 +101,20 @@ async def test_detect_block(page):
     assert await detect_block(page) is None
     await page.set_content("<div>请完成下列验证后继续</div>")
     assert "风控提示" in await detect_block(page)
+
+
+async def test_detect_block_ignores_hidden_verify_iframe(page):
+    verify_url = "https://verify.test/obj/rc-verifycenter/rmc-nocaptcha/index.html"
+    await page.route(verify_url, lambda route: route.fulfill(body="<p>verify</p>"))
+
+    await page.set_content(f'<iframe src="{verify_url}" style="display:none"></iframe>')
+    await page.wait_for_load_state()
+    assert len(page.frames) == 2
+    assert await detect_block(page) is None
+
+    await page.set_content(f'<iframe src="{verify_url}" width="300" height="200"></iframe>')
+    await page.wait_for_load_state()
+    assert await detect_block(page) == "页面中出现了验证码弹窗"
 
 
 async def test_locate_falls_back_and_times_out(page):

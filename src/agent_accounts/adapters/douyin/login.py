@@ -15,18 +15,26 @@ from agent_accounts.core.run import RunContext
 POLL_SECONDS = 2.0
 
 
-async def login(cfg: Config, run: RunContext, timeout_s: int = 300) -> LoginState:
+async def login(
+    cfg: Config, run: RunContext, timeout_s: int = 300, *, relogin: bool = False
+) -> LoginState:
+    """``relogin`` 为真时，已登录也不直接返回：先等人在窗口里退出当前账号，再等重新扫码。"""
     # 登录必须由人在可见窗口里完成，无视 headless 配置
     async with BrowserSession(PLATFORM, cfg.browser, headless=False) as s:
         await open_home(s, cfg.douyin.base_url)
         state = await login_state(s)
-        if state.logged_in:
+        if state.logged_in and not relogin:
             run.audit("login.already")
             return state
 
-        print("请在弹出的浏览器窗口中点击「登录」，用 agent 专用抖音账号扫码。")
+        waiting_logout = state.logged_in
+        if waiting_logout:
+            print("当前已登录。请先在窗口中退出这个账号（右上角头像 → 退出登录），")
+            print("然后点击「登录」，用 agent 专用抖音账号扫码。")
+        else:
+            print("请在弹出的浏览器窗口中点击「登录」，用 agent 专用抖音账号扫码。")
         print(f"等待登录完成（最长 {timeout_s} 秒）……")
-        run.audit("login.waiting")
+        run.audit("login.waiting", relogin=relogin)
 
         warned_block = False
         deadline = time.monotonic() + timeout_s
@@ -38,9 +46,14 @@ async def login(cfg: Config, run: RunContext, timeout_s: int = 300) -> LoginStat
                 print(f"检测到平台验证（{reason}），请在窗口中手动完成。")
                 warned_block = True
             state = await login_state(s)
-            if state.logged_in:
+            if waiting_logout:
+                if not state.logged_in:
+                    print("已退出，请扫码登录 agent 专用账号……")
+                    run.audit("login.logged_out")
+                    waiting_logout = False
+            elif state.logged_in:
                 await s.pause(3.0, 4.0)  # 给 profile 留出落盘时间
-                run.audit("login.ok")
+                run.audit("login.ok", relogin=relogin)
                 return state
             await asyncio.sleep(POLL_SECONDS)
 

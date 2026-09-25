@@ -30,14 +30,17 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
 
 
 @app.command()
-def login(timeout: int = typer.Option(300, help="等待扫码的最长秒数")) -> None:
+def login(
+    timeout: int = typer.Option(300, help="等待扫码的最长秒数"),
+    relogin: bool = typer.Option(False, help="已登录时先等人退出当前账号，再重新扫码"),
+) -> None:
     """headed 模式打开专用 profile，由人扫码登录。"""
     from agent_accounts.adapters.douyin.login import login as do_login
 
     async def main() -> None:
         # 登录是人工操作，账号冻结时也允许
         with start_run(PLATFORM, "login", require_active=False) as run:
-            state = await do_login(config.load(), run, timeout)
+            state = await do_login(config.load(), run, timeout, relogin=relogin)
         typer.secho(f"✅ 已登录（run {run.id}）" if state.logged_in else "未登录", fg="green")
 
     _run(main())
