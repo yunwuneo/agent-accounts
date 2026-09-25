@@ -76,7 +76,11 @@ class ImMessage:
     image_count: int | None = None
     content_json: str = ""
 
-    def preview(self) -> str:
+    def preview(self, max_len: int = 60) -> str:
+        text = " ".join(self._preview().split())  # 合并换行和多余空白
+        return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+    def _preview(self) -> str:
         match self.type:
             case "text" | "system":
                 return self.text or ""

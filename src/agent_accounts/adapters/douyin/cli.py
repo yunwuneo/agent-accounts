@@ -113,3 +113,140 @@ def spike_media(
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
     _run(main())
+
+
+def _local(dt) -> str:
+    return dt.astimezone().strftime("%m-%d %H:%M") if dt else "--"
+
+
+def _conv_json(c) -> dict:
+    return {
+        "conv_id": c.conv_id,
+        "name": c.name,
+        "kind": c.kind,
+        "unread": c.unread,
+        "last_at": c.last_at.isoformat() if c.last_at else None,
+        "last_preview": c.last_preview,
+    }
+
+
+def _msg_json(m) -> dict:
+    return {
+        "msg_id": m.msg_id,
+        "conv_id": m.conv_id,
+        "from_me": m.from_me,
+        "type": m.type,
+        "sent_at": m.sent_at.isoformat() if m.sent_at else None,
+        "text": m.text,
+        "aweme_id": m.aweme_id,
+        "share_title": m.share_title,
+        "share_author": m.share_author,
+        "image_count": m.image_count,
+    }
+
+
+def _print_conversations(convs) -> None:
+    for c in convs:
+        badge = f"({c.unread})" if c.unread else "   "
+        typer.echo(f"{badge:>4} {_local(c.last_at)}  {c.name or c.conv_id}  {c.last_preview or ''}")
+
+
+@app.command()
+def sync(
+    save_raw: bool = typer.Option(
+        False, help="把原始接口响应保存到 runs/<id>/raw（用于做 fixture）"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """打开首页拦截私信接口，新消息入库（不点进会话，不会标记已读）。"""
+    import json
+
+    from agent_accounts.adapters.douyin.sync import sync as do_sync
+
+    async def main() -> None:
+        with start_run(PLATFORM, "sync") as run:
+            r = await do_sync(config.load(), run, save_raw=save_raw)
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "source": r.source,
+                        "new_messages": [_msg_json(m) for m in r.new_messages],
+                        "conversations": [_conv_json(c) for c in r.conversations],
+                        "errors": r.errors,
+                        "mark_read_requests": r.mark_read_requests,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
+        if r.source == "dom":
+            typer.secho("⚠️ 接口数据未拦截到，以下为 DOM 会话列表（未入库）", fg="yellow")
+            for d in r.dom_conversations:
+                typer.echo(f"({d.unread}) {d.time_text}  {d.name}  {d.preview}")
+            return
+        typer.echo(
+            f"接口响应 {r.responses} 个，会话 {len(r.conversations)} 个，"
+            f"新消息 {len(r.new_messages)} 条，跳过命令消息 {r.skipped_commands} 条"
+        )
+        for m in r.new_messages:
+            who = "我" if m.from_me else "对方"
+            typer.echo(f"  {_local(m.sent_at)} {who}：{m.preview()}")
+        if r.errors:
+            typer.secho(f"解析错误 {len(r.errors)} 个：{r.errors[:3]}", fg="yellow")
+        mark = "✅ 未触发 mark_read" if not r.mark_read_requests else "⚠️ 出现了 mark_read 请求"
+        typer.echo(mark)
+
+    _run(main())
+
+
+@app.command()
+def inbox(
+    offline: bool = typer.Option(False, help="只读本地数据库，不打开浏览器"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """会话列表（默认先同步）。"""
+    import json
+
+    from agent_accounts.adapters.douyin import store as dstore
+    from agent_accounts.adapters.douyin.sync import sync as do_sync
+
+    if not offline:
+
+        async def main() -> None:
+            with start_run(PLATFORM, "inbox") as run:
+                await do_sync(config.load(), run)
+
+        _run(main())
+    convs = dstore.list_conversations()
+    if as_json:
+        typer.echo(json.dumps([_conv_json(c) for c in convs], ensure_ascii=False, indent=2))
+    else:
+        _print_conversations(convs)
+
+
+@app.command()
+def thread(
+    conv: str = typer.Argument(..., help="conv_id 或对方昵称（包含匹配）"),
+    limit: int = typer.Option(30, help="最多显示多少条"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """读本地数据库里的会话消息（不打开浏览器；先用 sync 同步）。"""
+    import json
+
+    from agent_accounts.adapters.douyin import store as dstore
+
+    row = dstore.find_conversation(conv)
+    if row is None:
+        typer.secho(f"找不到会话：{conv}（用 douyin inbox --offline 查看）", fg="red", err=True)
+        raise typer.Exit(1)
+    msgs = dstore.list_messages(row.conv_id, limit=limit)
+    if as_json:
+        typer.echo(json.dumps([_msg_json(m) for m in msgs], ensure_ascii=False, indent=2))
+        return
+    typer.secho(f"{row.name or row.conv_id}（未读 {row.unread}）", bold=True)
+    for m in msgs:
+        who = "我" if m.from_me else "对方"
+        extra = f"  aweme_id={m.aweme_id}" if m.aweme_id else ""
+        typer.echo(f"{_local(m.sent_at)} {who}：{m.preview()}{extra}")

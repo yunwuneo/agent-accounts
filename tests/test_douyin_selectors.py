@@ -154,3 +154,23 @@ async def test_locate_falls_back_and_times_out(page):
 
     broken = Target("t", "t", (Strategy("boom", boom), css(".missing")))
     assert await locate(page, broken, timeout_ms=300) is None
+
+
+async def test_dom_inbox_row_extraction(page):
+    """DOM 兜底读会话行。结构摘自 2026-09-25 真实页面，内容已替换。"""
+    from agent_accounts.adapters.douyin.sync import _DOM_ROWS_JS
+
+    await page.set_content(
+        '<div data-e2e="conversation-item" class="conversationConversationItemwrapper">'
+        '<div class="conversationConversationItemtitle">某人</div>'
+        '<div class="ConversationItemTagNextToTitletimeStr">10:47</div>'
+        '<pre class="ConversationItemHinttextBox">hi</pre>'
+        '<span class="semi-badge"><span x-semi-prop="count">3</span></span></div>'
+        '<div data-e2e="conversation-item"><div class="conversationConversationItemtitle">另一人'
+        "</div><pre>分享[图集]</pre></div>"
+    )
+    rows = await page.locator('[data-e2e="conversation-item"]').evaluate_all(_DOM_ROWS_JS)
+    assert rows == [
+        {"name": "某人", "time_text": "10:47", "preview": "hi", "unread": 3},
+        {"name": "另一人", "time_text": "", "preview": "分享[图集]", "unread": 0},
+    ]

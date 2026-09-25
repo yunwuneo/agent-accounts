@@ -10,6 +10,9 @@
 uv sync
 uv run douyin login       # 弹出浏览器，用 agent 专用账号扫码
 uv run douyin doctor      # 检查登录态和关键元素（只读，不发送）
+uv run douyin sync        # 打开首页拦截私信接口，新消息入库（不点进会话，不会标记已读）
+uv run douyin inbox --offline         # 会话列表（去掉 --offline 会先同步）
+uv run douyin thread <昵称或conv_id>  # 读本地消息，--json 输出结构化数据
 uv run agent-accounts freeze douyin   # 一键冻结，之后一切自动化操作都会被拒绝
 ```
 
@@ -20,8 +23,9 @@ uv run agent-accounts freeze douyin   # 一键冻结，之后一切自动化操�
 
 ```
 src/agent_accounts/
-  core/        config · paths · store(SQLite) · audit · alerts · run · capability
+  core/        config · paths · store(SQLite) · audit · alerts · run · capability · pb(protobuf)
   browser/     session(Playwright 持久化 profile) · locate(多策略定位)
   adapters/
-    douyin/    selectors · page · login · doctor · cli
+    douyin/    selectors · page · login · doctor · im(接口解析) · store · sync · spike · cli
+scripts/       make_douyin_fixtures.py（真实响应 → 脱敏 fixture）
 ```

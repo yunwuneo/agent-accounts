@@ -117,3 +117,10 @@ def test_non_ok_status_reports_error():
     env = PbMessage([(1, VARINT, im.CMD_INIT), (4, LEN, b"FAIL")])
     batch = im.parse_response(env.encode())
     assert batch.errors and not batch.messages
+
+
+def test_preview_is_single_line_and_truncated():
+    msg = im.parse_message(_message(8, {"itemId": "1", "content_title": "第一行\n" + "长" * 200}))
+    preview = msg.preview()
+    assert "\n" not in preview and len(preview) == 60 and preview.endswith("…")
+    assert msg.share_title.startswith("第一行\n")  # 原文完整保留

@@ -61,14 +61,22 @@ class AuditEvent(SQLModel, table=True):
 
 @cache
 def _engine_for(path: Path) -> Engine:
-    engine = create_engine(f"sqlite:///{path}")
-    SQLModel.metadata.create_all(engine)
-    path.chmod(0o600)
-    return engine
+    return create_engine(f"sqlite:///{path}")
+
+
+# 各适配器的表（如 douyin_messages）在导入适配器时才注册，表数量变化时补建
+_created_tables: dict[Path, int] = {}
 
 
 def engine() -> Engine:
-    return _engine_for(paths.db_path())
+    path = paths.db_path()
+    eng = _engine_for(path)
+    n = len(SQLModel.metadata.tables)
+    if _created_tables.get(path) != n:
+        SQLModel.metadata.create_all(eng)
+        path.chmod(0o600)
+        _created_tables[path] = n
+    return eng
 
 
 def session() -> Session:
