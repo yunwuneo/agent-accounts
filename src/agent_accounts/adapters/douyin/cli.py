@@ -381,3 +381,112 @@ def reply(
     else:
         typer.secho(f"❌ 发送失败：{r.error}", fg="red")
         raise typer.Exit(1)
+
+
+_ACTION = {
+    "baseline": "📍 记录基线（不回复旧消息）",
+    "blocked": "🛡️ 护栏拦截",
+    "skipped": "💤 模型决定不回",
+    "dry_run": "📝 dry_run（未发送）",
+    "sent": "✅ 已发送",
+    "failed": "❌ 发送失败",
+    "error": "⚠️ 出错",
+    "no_new": "（没有可处理的消息）",
+}
+
+
+def _print_outcome(o) -> None:
+    typer.echo(f"{_ACTION.get(o.action, o.action)}  {o.name or o.conv_id}")
+    r = o.reply
+    if r and r.text:
+        typer.echo(f"    回复：{r.text}")
+    if r and r.reason:
+        conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
+        typer.echo(f"    理由：{r.reason}{conf}")
+    if o.action in ("blocked", "error", "failed") and o.detail:
+        typer.echo(f"    原因：{o.detail}")
+
+
+@app.command()
+def run(
+    once: bool = typer.Option(False, "--once", help="只跑一轮"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="只生成不发送（默认）"),
+    allow_send: bool = typer.Option(
+        False, "--allow-send", help="M3 期间真正发送的第二道确认（还需 auto_reply = on）"
+    ),
+) -> None:
+    """自动读取 + 回复循环：sync → 新消息 → 决策 → 护栏 → dry_run 或发送。"""
+    import asyncio
+    import random
+    from datetime import datetime
+
+    from agent_accounts.adapters.douyin.autoreply import run_once
+
+    cfg = config.load()
+
+    async def tick() -> None:
+        with start_run(PLATFORM, "run") as run_ctx:
+            result = await run_once(cfg, run_ctx, dry_run=dry_run, allow_send=allow_send)
+        stamp = datetime.now().strftime("%H:%M:%S")
+        typer.secho(f"[{stamp}] 模式：{result.mode}，分析作品 {result.digested} 个", bold=True)
+        for o in result.outcomes:
+            _print_outcome(o)
+        if not result.outcomes:
+            typer.echo("    没有新消息")
+
+    async def loop() -> None:
+        while True:
+            await tick()
+            if once:
+                return
+            await asyncio.sleep(
+                random.uniform(cfg.douyin.interval_min_s, cfg.douyin.interval_max_s)
+            )
+
+    _run(loop())
+
+
+@app.command()
+def decide(
+    conv: str = typer.Argument(..., help="conv_id 或对方昵称"),
+    last: int = typer.Option(2, help="把对方最近几条消息当作新消息"),
+) -> None:
+    """试运行一次回复决策（只记录，不发送，不打开浏览器）。"""
+    from agent_accounts.adapters.douyin import store as dstore
+    from agent_accounts.adapters.douyin.autoreply import decide_for
+
+    row = dstore.find_conversation(conv)
+    if row is None:
+        typer.secho(f"找不到会话：{conv}", fg="red", err=True)
+        raise typer.Exit(1)
+
+    async def main():
+        with start_run(PLATFORM, "decide") as run_ctx:
+            return await decide_for(config.load(), run_ctx, row, last)
+
+    _print_outcome(_run(main()))
+
+
+@app.command()
+def replies(limit: int = typer.Option(20, help="显示最近多少条")) -> None:
+    """查看最近的回复决策记录（观察 dry_run 用）。"""
+    import json
+
+    from sqlmodel import col, select
+
+    from agent_accounts.adapters.douyin import store as dstore
+    from agent_accounts.core import store
+
+    with store.session() as s:
+        rows = s.exec(
+            select(dstore.DouyinReply).order_by(col(dstore.DouyinReply.id).desc()).limit(limit)
+        ).all()
+    names = {c.conv_id: c.name for c in dstore.list_conversations()}
+    for r in reversed(rows):
+        when = r.created_at.astimezone().strftime("%m-%d %H:%M")
+        typer.echo(f"{when} [{r.source}] {_ACTION.get(r.status, r.status)}  {names.get(r.conv_id)}")
+        if r.text:
+            typer.echo(f"    回复：{r.text}")
+        reasons = json.loads(r.guard_reasons or "[]")
+        if reasons:
+            typer.echo(f"    护栏：{'；'.join(reasons)}")

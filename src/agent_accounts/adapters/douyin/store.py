@@ -73,7 +73,7 @@ class DouyinMessage(SQLModel, table=True):
     first_seen_at: datetime = Field(default_factory=_now)
     first_seen_run: str | None = None
 
-    def preview(self) -> str:
+    def preview(self, max_len: int = 60) -> str:
         return im.ImMessage(
             msg_id=self.msg_id,
             conv_id=self.conv_id,
@@ -86,7 +86,7 @@ class DouyinMessage(SQLModel, table=True):
             sent_at=self.sent_at,
             text=self.text,
             share_title=self.share_title,
-        ).preview()
+        ).preview(max_len)
 
 
 @dataclass

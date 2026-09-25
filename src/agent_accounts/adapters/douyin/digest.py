@@ -177,11 +177,25 @@ async def digest_items(
         await open_home(s, cfg.douyin.base_url)
         if not (await login_state(s)).logged_in:
             raise HumanRequired("未登录", "请先运行 douyin login")
-        for i, aweme_id in enumerate(todo):
-            if i:
-                await s.pause(2.0, 4.0)
-            hint = (kinds or {}).get(aweme_id) or kind_hint(aweme_id)
-            outcomes.append(await _digest_one(s, cfg, run, aweme_id, hint))
+        outcomes += await digest_in_session(s, cfg, run, todo, kinds=kinds)
+    return outcomes
+
+
+async def digest_in_session(
+    s: BrowserSession,
+    cfg: Config,
+    run: RunContext,
+    aweme_ids: list[str],
+    *,
+    kinds: dict[str, dmedia.Kind] | None = None,
+) -> list[DigestOutcome]:
+    """在已登录的浏览器会话里逐个分析（不查缓存，调用方负责过滤）。会离开当前页面。"""
+    outcomes = []
+    for i, aweme_id in enumerate(aweme_ids):
+        if i:
+            await s.pause(2.0, 4.0)
+        hint = (kinds or {}).get(aweme_id) or kind_hint(aweme_id)
+        outcomes.append(await _digest_one(s, cfg, run, aweme_id, hint))
     return outcomes
 
 

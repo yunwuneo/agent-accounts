@@ -47,6 +47,10 @@ class DouyinConfig(BaseModel):
     base_url: str = "https://www.douyin.com/"
     # 默认保守：新能力先以 dry_run 上线
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
+    context_messages: int = 20  # 回复决策时带上的最近消息条数
+    digest_per_tick: int = 3  # 每轮最多自动分析几个新分享的作品（控制成本）
+    interval_min_s: int = 60  # douyin run 两轮之间的随机间隔
+    interval_max_s: int = 120
 
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")

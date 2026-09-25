@@ -67,6 +67,7 @@ def config_show() -> None:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(1) from None
     path = paths.config_path()
+    typer.echo(f"自动回复：douyin.auto_reply = {cfg.douyin.auto_reply}")
     typer.echo(f"配置文件：{path}{'' if path.exists() else '（不存在，使用默认值）'}")
     sections = {
         "llm.understand（媒体理解）": cfg.llm.understand,

@@ -44,6 +44,10 @@ class ImCollector:
         page.on("request", self._on_request)
         page.on("response", self._on_response)
 
+    def detach(self, page: Page) -> None:
+        page.remove_listener("request", self._on_request)
+        page.remove_listener("response", self._on_response)
+
     def _on_request(self, request: Request) -> None:
         if MARK_READ_PATH in request.url:
             self.mark_read_requests += 1
@@ -113,9 +117,17 @@ async def _read_dom_inbox(s: BrowserSession) -> list[DomConversation]:
 async def sync(
     cfg: Config, run: RunContext, *, wait_s: float = 15, save_raw: bool = False
 ) -> SyncResult:
-    collector = ImCollector()
     async with BrowserSession(PLATFORM, cfg.browser) as s:
-        collector.attach(s.page)
+        return await sync_in_session(s, cfg, run, wait_s=wait_s, save_raw=save_raw)
+
+
+async def sync_in_session(
+    s: BrowserSession, cfg: Config, run: RunContext, *, wait_s: float = 15, save_raw: bool = False
+) -> SyncResult:
+    """在已打开的浏览器会话里同步一次（会重新打开首页）。"""
+    collector = ImCollector()
+    collector.attach(s.page)
+    try:
         await open_home(s, cfg.douyin.base_url)
         await ensure_not_blocked(s.page)
         if not (await login_state(s)).logged_in:
@@ -131,6 +143,8 @@ async def sync(
             result.mark_read_requests = collector.mark_read_requests
             run.audit("douyin.sync", source="dom", conversations=len(result.dom_conversations))
             return result
+    finally:
+        collector.detach(s.page)
 
     if save_raw:
         raw_dir = paths.ensure_dir(run.dir / "raw")
