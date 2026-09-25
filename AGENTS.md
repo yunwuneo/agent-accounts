@@ -66,6 +66,7 @@ uv run douyin doctor                  # 真实页面自检，改 selectors.py �
 - **代码优先，LLM 最少**：导航、解析、去重、发送、校验都写成确定性代码；LLM 只负责理解内容和决定说什么、做什么。
 - **人在回路**：注册、登录、验证码、风控申诉都交给人；遇到这些情况就停机并告警，**不做任何绕过**。
 - **agent 自己调试时也一样**：对真实账号运行命令时，只要出现一次验证码或风控，就立即停止，不要换参数重试或连续运行，先报告用户。撞到风控后账号会被自动冻结（`agent-accounts unfreeze <platform>` 必须由人确认后执行）。
+- **有代价的命令单独运行、先问再批量**：会调用付费模型、访问真实账号或发消息的命令（`douyin digest`、`sync`、`spike`、以后的 `reply`/`run` 等）必须单独一条执行，不要和 lint/测试/提交等命令拼在一起；批量处理（如 `digest --pending`）前先告诉用户数量并征得同意。（2026-09-25 agent 想统计待处理数量时误把 `digest --pending` 拼进了命令，多处理了 8 条。）
 - **不读取明文 key**：`~/.agent-accounts/config.toml` 里有用户的 API key。agent 不要 cat / Read / grep 这个文件，查看配置用 `uv run agent-accounts config show`（只显示 key 是否已设置）。key 不得出现在日志、审计、prompt、Notion 或提交里。
 - **真实页面只用 headed 模式**：headless 会稳定触发验证码（Spike-4，2026-09-25）。
 - **凭据不进 LLM**：密码、token 不出现在 prompt 和日志里。
