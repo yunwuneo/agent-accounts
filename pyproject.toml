@@ -1,0 +1,41 @@
+[project]
+name = "agent-accounts"
+version = "0.1.0"
+description = "Echo agent 的账号与能力框架：以 agent 自己的身份使用外部平台"
+authors = [
+    { name = "neo", email = "i@neo7.cn" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "playwright>=1.63.0",
+    "pydantic>=2.13.5",
+    "sqlmodel>=0.0.47",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+agent-accounts = "agent_accounts.cli:app"
+douyin = "agent_accounts.adapters.douyin.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["browser: 需要本机已安装 Playwright Chromium"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

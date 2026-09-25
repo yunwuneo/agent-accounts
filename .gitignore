@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# 运行数据默认放在 ~/.agent-accounts/，这里兜底防止误把 profile、数据库、运行快照提交进仓库
+.agent-accounts/
+profiles/
+runs/
+*.db
+*.sqlite
+*.sqlite3

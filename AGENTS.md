@@ -50,6 +50,17 @@
 - **不要**把密码、token、cookie、浏览器 profile 路径中的敏感信息、私信原文或对方的个人信息写进 Notion。私信相关的进展只写统计和脱敏后的描述。
 - 用中文写，风格与现有草案一致。
 
+## 开发命令
+
+```bash
+uv sync                               # 安装依赖
+uv run pytest                         # 测试（浏览器测试用本机 Google Chrome 无头运行）
+uv run ruff check . && uv run ruff format .
+uv run douyin doctor                  # 真实页面自检，改 selectors.py 后必须跑
+```
+
+测试会把 `AGENT_ACCOUNTS_HOME` 指向临时目录；**不要在测试里碰真实的 `~/.agent-accounts/`**（里面是已登录的 profile）。
+
 ## 开发约束（摘自草案，细节以 Notion 为准）
 
 - **代码优先，LLM 最少**：导航、解析、去重、发送、校验都写成确定性代码；LLM 只负责理解内容和决定说什么、做什么。
