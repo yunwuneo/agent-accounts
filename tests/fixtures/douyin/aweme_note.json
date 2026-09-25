@@ -1,0 +1,40 @@
+{
+ "aweme_id": "7652398857766776699",
+ "aweme_type": 68,
+ "desc": "作品描述 #话题一 #话题二",
+ "author": {
+  "nickname": "作者昵称"
+ },
+ "text_extra": [],
+ "duration": 0,
+ "music": {
+  "title": "背景音乐"
+ },
+ "video": {
+  "duration": 0,
+  "play_addr": {
+   "width": 720,
+   "height": 720,
+   "url_list": [
+    "https://example.invalid/play.mp4"
+   ]
+  },
+  "cover": {
+   "width": 720,
+   "height": 720,
+   "url_list": [
+    "https://example.invalid/cover.jpg"
+   ]
+  },
+  "bit_rate": []
+ },
+ "images": [
+  {
+   "width": 2160,
+   "height": 3840,
+   "url_list": [
+    "https://example.invalid/image1.webp"
+   ]
+  }
+ ]
+}

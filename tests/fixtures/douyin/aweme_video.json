@@ -1,0 +1,308 @@
+{
+ "aweme_id": "7643765066207320442",
+ "aweme_type": 0,
+ "desc": "作品描述 #话题一 #话题二",
+ "author": {
+  "nickname": "作者昵称"
+ },
+ "text_extra": [
+  {
+   "hashtag_name": "话题1"
+  },
+  {
+   "hashtag_name": "话题2"
+  },
+  {
+   "hashtag_name": "话题3"
+  }
+ ],
+ "duration": 75934,
+ "music": {
+  "title": "背景音乐"
+ },
+ "video": {
+  "duration": 75934,
+  "play_addr": {
+   "width": 1920,
+   "height": 1080,
+   "data_size": 22638912,
+   "url_list": [
+    "https://example.invalid/play.mp4"
+   ]
+  },
+  "cover": {
+   "width": 720,
+   "height": 720,
+   "url_list": [
+    "https://example.invalid/cover.jpg"
+   ]
+  },
+  "bit_rate": [
+   {
+    "gear_name": "normal_1080_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1920,
+     "height": 1080,
+     "data_size": 22638912,
+     "url_list": [
+      "https://example.invalid/normal_1080_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "normal_1080_0",
+    "format": "dash",
+    "play_addr": {
+     "width": 1920,
+     "height": 1080,
+     "data_size": 22053823,
+     "url_list": [
+      "https://example.invalid/normal_1080_0.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "normal_720_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 16256035,
+     "url_list": [
+      "https://example.invalid/normal_720_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "low_720_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 15287186,
+     "url_list": [
+      "https://example.invalid/low_720_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "low_720_0",
+    "format": "dash",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 14701417,
+     "url_list": [
+      "https://example.invalid/low_720_0.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "low_540_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 14060000,
+     "url_list": [
+      "https://example.invalid/low_540_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "low_540_0",
+    "format": "dash",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 13474143,
+     "url_list": [
+      "https://example.invalid/low_540_0.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "lower_540_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 12787288,
+     "url_list": [
+      "https://example.invalid/lower_540_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "1080_1_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1920,
+     "height": 1080,
+     "data_size": 12108137,
+     "url_list": [
+      "https://example.invalid/1080_1_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "1080_1_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1920,
+     "height": 1080,
+     "data_size": 11522286,
+     "url_list": [
+      "https://example.invalid/1080_1_1.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "adapt_low_540_0",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 9210071,
+     "url_list": [
+      "https://example.invalid/adapt_low_540_0.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_1_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 8855795,
+     "url_list": [
+      "https://example.invalid/720_1_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "adapt_low_540_0",
+    "format": "dash",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 8624468,
+     "url_list": [
+      "https://example.invalid/adapt_low_540_0.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_1_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 8269508,
+     "url_list": [
+      "https://example.invalid/720_1_1.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_2_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 6820047,
+     "url_list": [
+      "https://example.invalid/720_2_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_3_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 6236628,
+     "url_list": [
+      "https://example.invalid/720_3_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_2_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 6233760,
+     "url_list": [
+      "https://example.invalid/720_2_1.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_3_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 5650341,
+     "url_list": [
+      "https://example.invalid/720_3_1.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "540_3_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 4968557,
+     "url_list": [
+      "https://example.invalid/540_3_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_4_1",
+    "format": "mp4",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 4565144,
+     "url_list": [
+      "https://example.invalid/720_4_1.mp4"
+     ]
+    }
+   },
+   {
+    "gear_name": "540_3_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1024,
+     "height": 576,
+     "data_size": 4469059,
+     "url_list": [
+      "https://example.invalid/540_3_1.dash"
+     ]
+    }
+   },
+   {
+    "gear_name": "720_4_1",
+    "format": "dash",
+    "play_addr": {
+     "width": 1280,
+     "height": 720,
+     "data_size": 3978857,
+     "url_list": [
+      "https://example.invalid/720_4_1.dash"
+     ]
+    }
+   }
+  ]
+ },
+ "images": []
+}

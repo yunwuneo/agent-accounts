@@ -3,6 +3,7 @@
 用法::
 
     uv run python scripts/make_douyin_fixtures.py ~/.agent-accounts/runs/<id>/net
+    uv run python scripts/make_douyin_fixtures.py <runs>/<id>/detail.json aweme_video
 
 脱敏策略：
 1. 只保留解析器用到的字段（见 adapters/douyin/im.py 的文档），其余字段一律丢弃；
@@ -223,5 +224,53 @@ def main(net_dir: Path) -> None:
         print(f"录制里没有可用的：{missing}")
 
 
+def scrub_aweme(d: dict) -> dict:
+    """作品 JSON 只保留 media.parse_aweme 用到的字段，文本和 URL 换成占位符。"""
+
+    def addr(a: dict | None, tag: str) -> dict:
+        a = a or {}
+        keep = {k: a[k] for k in ("width", "height", "data_size") if k in a}
+        return {**keep, "url_list": [f"https://example.invalid/{tag}"] if a.get("url_list") else []}
+
+    video = d.get("video") or {}
+    return {
+        "aweme_id": d.get("aweme_id"),
+        "aweme_type": d.get("aweme_type"),
+        "desc": "作品描述 #话题一 #话题二",
+        "author": {"nickname": "作者昵称"},
+        "text_extra": [
+            {"hashtag_name": f"话题{i}"}
+            for i, t in enumerate(d.get("text_extra") or [], 1)
+            if t.get("hashtag_name")
+        ],
+        "duration": d.get("duration"),
+        "music": {"title": "背景音乐"} if d.get("music") else None,
+        "video": {
+            "duration": video.get("duration"),
+            "play_addr": addr(video.get("play_addr"), "play.mp4"),
+            "cover": addr(video.get("cover"), "cover.jpg"),
+            "bit_rate": [
+                {
+                    "gear_name": b.get("gear_name"),
+                    "format": b.get("format"),
+                    "play_addr": addr(
+                        b.get("play_addr"), f"{b.get('gear_name')}.{b.get('format')}"
+                    ),
+                }
+                for b in video.get("bit_rate") or []
+            ],
+        },
+        "images": [addr(img, f"image{i}.webp") for i, img in enumerate(d.get("images") or [], 1)],
+    }
+
+
 if __name__ == "__main__":
-    main(Path(sys.argv[1]).expanduser())
+    src = Path(sys.argv[1]).expanduser()
+    if src.suffix == ".json":
+        out = OUT / f"{sys.argv[2]}.json"
+        out.write_text(
+            json.dumps(scrub_aweme(json.loads(src.read_text())), ensure_ascii=False, indent=1)
+        )
+        print(f"写入 {out}")
+    else:
+        main(src)

@@ -15,6 +15,7 @@ from playwright.async_api import Page, Response
 
 from agent_accounts.adapters.douyin import PLATFORM
 from agent_accounts.adapters.douyin import selectors as sel
+from agent_accounts.adapters.douyin.media import find_aweme, find_filter
 from agent_accounts.adapters.douyin.page import ensure_not_blocked, login_state, open_home
 from agent_accounts.browser.locate import locate
 from agent_accounts.browser.netlog import NetRecorder, endpoint
@@ -99,31 +100,6 @@ def _ffprobe(path) -> dict[str, Any]:
     return json.loads(out.stdout or "{}") if out.returncode == 0 else {"error": out.stderr[-300:]}
 
 
-def _walk(o: Any):
-    if isinstance(o, dict):
-        yield o
-        for v in o.values():
-            yield from _walk(v)
-    elif isinstance(o, list):
-        for v in o:
-            yield from _walk(v)
-
-
-def _find_aweme(data: Any, aweme_id: str) -> dict[str, Any] | None:
-    """在任意接口 JSON 里找到 aweme_id 匹配、且带作品内容的对象。"""
-    for d in _walk(data):
-        if str(d.get("aweme_id")) == aweme_id and ("video" in d or "images" in d):
-            return d
-    return None
-
-
-def _find_filter(data: Any, aweme_id: str) -> dict[str, Any] | None:
-    for d in _walk(data):
-        if str(d.get("aweme_id")) == aweme_id and "filter_reason" in d:
-            return d
-    return None
-
-
 def _summarize_detail(d: dict[str, Any]) -> dict[str, Any]:
     video = d.get("video") or {}
     return {
@@ -156,9 +132,9 @@ async def spike_media(cfg: Config, run: RunContext, aweme_id: str, kind: str) ->
             data = await resp.json()
         except Exception:
             return
-        if fd := _find_filter(data, aweme_id):
+        if fd := find_filter(data, aweme_id):
             filtered.append((ep, fd))
-        if aweme := _find_aweme(data, aweme_id):
+        if aweme := find_aweme(data, aweme_id):
             captured.append((ep, aweme))
 
     result: dict[str, Any] = {"aweme_id": aweme_id, "kind": kind}
