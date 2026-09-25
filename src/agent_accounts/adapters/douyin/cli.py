@@ -332,7 +332,7 @@ def digest(
         d = o.digest
         tag = "（缓存）" if o.cached else ""
         kind = "视频" if d.kind == "video" else "图集"
-        typer.secho(f"\n[{kind}] {d.aweme_id}{tag}  {d.author}", bold=True)
+        typer.secho(f"\n[{kind}] {d.item_id}{tag}  {d.author}", bold=True)
         if d.title:
             typer.echo(f"标题：{' '.join(d.title.split())[:80]}")
         typer.echo(f"摘要：{d.summary}")

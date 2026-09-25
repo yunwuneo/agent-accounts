@@ -149,3 +149,15 @@ def test_pending_items_skips_mine_and_digested():
     digests.save(digests.MediaDigest(platform="douyin", item_id=pending[0], kind="video"))
     assert pending[0] not in ddigest.pending_items()
     assert ddigest.pending_items(limit=2) == pending[1:3]
+
+
+async def test_upstream_error_echoing_key_is_scrubbed():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        msg = "Incorrect API key provided: sk-llm-k*********key, raw sk-llm-key"
+        return httpx2.Response(400, json={"type": "error", "error": {"message": msg}})
+
+    cfg = _cfg()
+    with pytest.raises(UnderstandError) as exc:
+        await understand(cfg, UnderstandInput(kind="video"), client=_client(cfg, handler))
+    text = str(exc.value)
+    assert "sk-llm-k" not in text and "sk-llm-key" not in text and "*********" not in text

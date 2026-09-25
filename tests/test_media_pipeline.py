@@ -100,9 +100,16 @@ async def test_transcribe_error_does_not_leak_key(tmp_path):
     audio.write_bytes(b"x")
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(401, json={"error": "invalid key"})
+        # OpenAI 的 401 会在 message 里回显打码的 key
+        body = {
+            "error": {
+                "message": "Incorrect API key provided: sk-test-*****-key",
+                "code": "invalid_api_key",
+            }
+        }
+        return httpx2.Response(401, json=body)
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         with pytest.raises(TranscribeError) as exc:
             await transcribe(_cfg(), audio, client=client)
-    assert "401" in str(exc.value) and "sk-test-key" not in str(exc.value)
+    assert str(exc.value) == "HTTP 401（invalid_api_key）"

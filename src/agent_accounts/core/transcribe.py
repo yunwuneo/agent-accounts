@@ -42,9 +42,19 @@ async def transcribe(
         if own:
             await client.aclose()
     if resp.status_code != 200:
-        # 只带状态码和响应开头，不带请求头（里面有 key）
-        raise TranscribeError(f"HTTP {resp.status_code}：{resp.text[:200]}")
+        # 只带状态码和错误类型。上游的错误原文可能回显（打码的）key，不保存、不打印
+        raise TranscribeError(f"HTTP {resp.status_code}（{_error_code(resp)}）")
     try:
         return (resp.json().get("text") or "").strip()
     except ValueError as e:
         raise TranscribeError("响应不是 JSON") from e
+
+
+def _error_code(resp: httpx2.Response) -> str:
+    try:
+        err = resp.json().get("error") or {}
+    except ValueError:
+        return "非 JSON 响应"
+    if isinstance(err, dict):
+        return str(err.get("code") or err.get("type") or "未知错误")[:40]
+    return "未知错误"

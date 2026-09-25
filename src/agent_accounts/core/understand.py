@@ -123,6 +123,19 @@ def _parse_json_text(text: str) -> DigestOutput:
         raise UnderstandError(f"模型返回的 JSON 不合格：{type(e).__name__}") from e
 
 
+_MASKED_KEY = re.compile(r"[A-Za-z0-9_-]{2,}\*{3,}[A-Za-z0-9_-]*")
+
+
+def scrub(text: str, key: str | None) -> str:
+    """去掉上游错误信息里回显的 key：打码形式（如 sk-ab****cd）和 key 本身的片段。"""
+    text = _MASKED_KEY.sub("***", text)
+    if key:
+        for part in {key, key[:12], key[-8:]}:
+            if len(part) >= 6:
+                text = text.replace(part, "***")
+    return text[:200]
+
+
 def make_client(cfg: LLMEndpoint, **kwargs) -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(
         api_key=cfg.require_key("llm.understand"),
@@ -160,11 +173,11 @@ async def understand(
             if cfg.structured_output
             else ""
         )
-        raise UnderstandError(f"请求被拒绝：{e.message[:200]}{hint}") from e
+        raise UnderstandError(f"请求被拒绝：{scrub(e.message, cfg.key())}{hint}") from e
     except anthropic.APIConnectionError as e:
         raise UnderstandError(f"连接 {cfg.base_url or '默认 endpoint'} 失败") from e
     except anthropic.APIStatusError as e:
-        raise UnderstandError(f"HTTP {e.status_code}：{e.message[:200]}") from e
+        raise UnderstandError(f"HTTP {e.status_code}：{scrub(e.message, cfg.key())}") from e
 
     if resp.stop_reason == "refusal":
         raise UnderstandError("模型拒绝分析这个作品")
