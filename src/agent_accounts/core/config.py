@@ -15,11 +15,12 @@ key 用 SecretStr 保存，打印配置对象时不会显示明文。
 from __future__ import annotations
 
 import os
+import re
 import stat
 import tomllib
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
 
 from agent_accounts.core import paths
 from agent_accounts.core.errors import AgentAccountsError
@@ -48,6 +49,9 @@ class DouyinConfig(BaseModel):
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
 
 
+_ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
+
+
 class Endpoint(BaseModel):
     """一个模型服务的连接信息。"""
 
@@ -55,6 +59,16 @@ class Endpoint(BaseModel):
     api_key: SecretStr | None = None
     api_key_env: str | None = None
     model: str
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name(cls, v: str | None) -> str | None:
+        # 这里填的是环境变量名；误填成 key 本身时报错，且错误信息不包含输入值
+        if v is not None and not _ENV_NAME.fullmatch(v):
+            raise ValueError(
+                "api_key_env 应该是环境变量名（如 ANTHROPIC_API_KEY）；key 本身请写在 api_key"
+            )
+        return v
 
     def key(self) -> str | None:
         if self.api_key is not None:
@@ -133,4 +147,12 @@ def load() -> Config:
     # 文件里有明文 key 时，权限必须只有本人可读
     if _contains_plain_key(data) and stat.S_IMODE(path.stat().st_mode) & 0o077:
         raise ConfigError(f"{path} 含有 api_key，但权限过宽；请执行 chmod 600 {path}")
-    return Config.model_validate(data)
+    try:
+        return Config.model_validate(data)
+    except ValidationError as e:
+        # 不用 str(e)：Pydantic 默认会把输入值（可能是 key）写进错误信息
+        problems = "；".join(
+            f"[{'.'.join(str(x) for x in err['loc'])}] {err['msg']}"
+            for err in e.errors(include_input=False, include_url=False)
+        )
+        raise ConfigError(f"{path} 有误：{problems}") from None

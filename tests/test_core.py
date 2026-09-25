@@ -140,3 +140,20 @@ def test_missing_key_error_names_section(isolated_home, monkeypatch):
     _write_config(isolated_home, '[llm.understand]\napi_key_env = "NOPE_KEY"\nmodel = "m"\n')
     with pytest.raises(config.ConfigError, match="llm.understand"):
         config.load().llm.understand.require_key("llm.understand")
+
+
+def test_key_pasted_into_api_key_env_is_rejected_without_echo(isolated_home):
+    leaked = "ah-" + "0123456789abcdef" * 4
+    _write_config(isolated_home, f'[llm.reply]\napi_key_env = "{leaked}"\nmodel = "m"\n')
+    with pytest.raises(config.ConfigError) as exc:
+        config.load()
+    assert "api_key_env" in str(exc.value) and "环境变量名" in str(exc.value)
+    assert leaked not in str(exc.value) and "0123456789abcdef" not in str(exc.value)
+    assert exc.value.__cause__ is None  # 不链接原始 ValidationError（里面有输入值）
+
+
+def test_other_validation_errors_do_not_echo_input(isolated_home):
+    _write_config(isolated_home, '[llm.understand]\napi_key = 12345678\nmodel = "m"\n')
+    with pytest.raises(config.ConfigError) as exc:
+        config.load()
+    assert "12345678" not in str(exc.value)
