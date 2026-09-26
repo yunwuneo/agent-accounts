@@ -69,6 +69,73 @@ def mcp(
         raise typer.Exit(4) from None
 
 
+def _root_cause(e: BaseException) -> BaseException:
+    """MCP 客户端内部用 TaskGroup，异常常被包成 ExceptionGroup；取出第一个实际原因。"""
+    while isinstance(e, BaseExceptionGroup) and e.exceptions:
+        timeouts = [x for x in e.exceptions if isinstance(_root_cause(x), TimeoutError)]
+        e = timeouts[0] if timeouts else e.exceptions[0]
+    return e
+
+
+@app.command("mcp-check")
+def mcp_check(
+    url: str | None = typer.Option(
+        None, help="要检查的地址；默认本机 http://127.0.0.1:<port><path>。填对外地址可检查代理链路"
+    ),
+    timeout: float = typer.Option(15, help="每一步的超时秒数"),
+) -> None:
+    """连接 HTTP MCP，逐步检查：握手 → 列工具 → 调 get_persona，报告每步耗时和卡在哪一步。
+
+    用配置里的 token 鉴权（不显示 token）；只输出耗时和字数，不输出人设内容。
+    """
+    import asyncio
+    import time
+
+    import httpx2
+    from mcp.client import Client
+    from mcp.client.streamable_http import streamable_http_client
+
+    from agent_accounts.core import config
+
+    try:
+        cfg = config.load().mcp
+        token = cfg.bearer()
+    except config.ConfigError as e:
+        typer.secho(f"⚙️ {e}", fg="red", err=True)
+        raise typer.Exit(4) from None
+    if not token:
+        typer.secho("配置里没有 [mcp] token，先运行 agent-accounts mcp-token", fg="red", err=True)
+        raise typer.Exit(4)
+    target = url or f"http://127.0.0.1:{cfg.port}{cfg.path}"
+    typer.echo(f"检查 {target}")
+    step = "连接并握手（initialize）"
+
+    async def main() -> None:
+        nonlocal step
+        http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+        t = time.monotonic()
+        async with http, Client(streamable_http_client(target, http_client=http)) as c:
+            typer.echo(f"  ✅ {step}  {time.monotonic() - t:.2f}s")
+            step, t = "列出工具（tools/list）", time.monotonic()
+            tools = await asyncio.wait_for(c.list_tools(), timeout)
+            typer.echo(f"  ✅ {step}  {len(tools.tools)} 个，{time.monotonic() - t:.2f}s")
+            step, t = "调用 get_persona（tools/call）", time.monotonic()
+            r = await asyncio.wait_for(c.call_tool("get_persona", {}), timeout)
+            if r.is_error:
+                raise RuntimeError("工具返回错误")
+            chars = len((r.structured_content or {}).get("persona", ""))
+            typer.echo(f"  ✅ {step}  人设 {chars} 字，{time.monotonic() - t:.2f}s")
+
+    try:
+        asyncio.run(asyncio.wait_for(main(), timeout * 3))
+    except Exception as e:  # 超时、连接失败、HTTP 错误都在这里报告卡在哪一步
+        root = _root_cause(e)
+        kind = "超时" if isinstance(root, TimeoutError) else type(root).__name__
+        typer.secho(f"  ❌ {step}：{kind} {str(root)[:200]}", fg="red")
+        raise typer.Exit(1) from None
+    typer.secho("全部通过", fg="green")
+
+
 @app.command("mcp-token")
 def mcp_token(
     rotate: bool = typer.Option(False, "--rotate", help="已有 token 时换一个新的（旧的立即失效）"),
@@ -138,6 +205,11 @@ def config_show() -> None:
         typer.echo(
             f"[{name}] model={info['model']}  base_url={info['base_url']}  key={info['key']}"
         )
+    m = cfg.media
+    typer.echo(
+        f"[media（看视频）] 约每 {m.frame_interval_s:g} 秒一帧，最多 {m.max_frames} 帧；"
+        f"语音最多转写 {m.max_video_seconds} 秒，每段 {m.transcribe_segment_s} 秒"
+    )
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
     typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 

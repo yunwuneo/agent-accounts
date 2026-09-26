@@ -37,9 +37,12 @@ language = "zh"
 min_level = "warning"    # info / warning / critical
 
 [media]
-max_frames = 10      # 视频最多抽几帧发给模型
-frame_width = 768    # 抽帧缩放宽度
-max_images = 12      # 图集最多用几张
+frame_interval_s = 5          # 约每几秒抽一帧；帧均匀覆盖整段视频，不只看开头
+max_frames = 30               # 视频最多抽几帧发给模型（超过时帧间隔变大，仍覆盖到结尾）
+frame_width = 768             # 抽帧缩放宽度
+max_images = 12               # 图集最多用几张
+max_video_seconds = 3600      # 语音最多转写多长
+transcribe_segment_s = 600    # 长音轨分段转写，每段秒数
 
 # 自动回复护栏（douyin.auto_reply 为 on 时才会真的发送）
 [guard]

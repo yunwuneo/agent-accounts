@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -52,10 +53,23 @@ async def probe(path: Path) -> ProbeInfo:
     )
 
 
-def frame_times(duration_s: float, min_frames: int, max_frames: int) -> list[float]:
-    """大约每 8 秒一帧，数量限制在 [min_frames, max_frames]，取每段的中点，避开片头片尾黑帧。"""
-    n = max(min_frames, min(max_frames, round(duration_s / 8)))
+def frame_times(
+    duration_s: float, min_frames: int, max_frames: int, interval_s: float = 5.0
+) -> list[float]:
+    """把整段视频均匀切成 n 段，每段取中点（避开片头片尾黑帧），覆盖从头到尾。
+
+    n 约为「时长 / interval_s」，限制在 [min_frames, max_frames]；超过上限时帧间隔变大，
+    但仍然覆盖整段视频，不会只看开头。
+    """
+    n = max(min_frames, min(max_frames, math.ceil(duration_s / interval_s)))
     return [round(duration_s * (i + 0.5) / n, 2) for i in range(n)]
+
+
+@dataclass
+class Frames:
+    paths: list[Path] = field(default_factory=list)
+    times: list[float] = field(default_factory=list)  # 每张对应的秒数，与 paths 一一对应
+    duration_s: float | None = None  # 实际文件的时长（ffprobe）
 
 
 def _scale_filter(max_side: int) -> str:
@@ -64,22 +78,28 @@ def _scale_filter(max_side: int) -> str:
 
 
 async def extract_frames(
-    video: Path, out_dir: Path, *, min_frames: int, max_frames: int, max_side: int
-) -> list[Path]:
+    video: Path,
+    out_dir: Path,
+    *,
+    min_frames: int,
+    max_frames: int,
+    max_side: int,
+    interval_s: float = 5.0,
+) -> Frames:
     info = await probe(video)
     if not info.has_video:
         raise MediaError("文件里没有视频流")
-    times = frame_times(info.duration_s or 1.0, min_frames, max_frames)
-    frames = []
-    for i, t in enumerate(times):
-        out = out_dir / f"frame_{i:02d}.jpg"
+    result = Frames(duration_s=info.duration_s)
+    for i, t in enumerate(frame_times(info.duration_s or 1.0, min_frames, max_frames, interval_s)):
+        out = out_dir / f"frame_{i:03d}.jpg"
         await _run(
             "ffmpeg", "-v", "error", "-y", "-ss", str(t), "-i", str(video),
             "-frames:v", "1", "-vf", _scale_filter(max_side), "-q:v", "4", str(out),
         )  # fmt: skip
         if out.exists():
-            frames.append(out)
-    return frames
+            result.paths.append(out)
+            result.times.append(t)
+    return result
 
 
 async def to_jpeg(image: Path, out: Path, *, max_side: int) -> Path:
@@ -99,3 +119,24 @@ async def extract_audio(video: Path, out: Path, *, max_seconds: int) -> Path | N
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k", str(out),
     )  # fmt: skip
     return out
+
+
+async def split_audio(audio: Path, out_dir: Path, *, segment_s: int) -> list[Path]:
+    """把长音轨按 segment_s 秒切段（不重新编码），用于分段转写；短音轨原样返回。"""
+    duration = (await probe(audio)).duration_s or 0
+    if duration <= segment_s:
+        return [audio]
+    pattern = out_dir / f"{audio.stem}_%03d{audio.suffix}"
+    await _run(
+        "ffmpeg", "-v", "error", "-y", "-i", str(audio), "-f", "segment",
+        "-segment_time", str(segment_s), "-c", "copy", str(pattern),
+    )  # fmt: skip
+    return sorted(out_dir.glob(f"{audio.stem}_*{audio.suffix}"))
+
+
+def clock(seconds: float) -> str:
+    """秒数 → m:ss（超过一小时为 h:mm:ss）。"""
+    s = int(seconds)
+    h, rest = divmod(s, 3600)
+    m, sec = divmod(rest, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"

@@ -195,3 +195,43 @@ async def test_proxy_host_allowed(http_server):
 def test_allowed_hosts_rejects_urls():
     with pytest.raises(ValueError, match="不带 http"):
         config.McpConfig(allowed_hosts=["https://mcp.example.com"])
+
+
+def test_mcp_check_passes(http_server):
+    config.write_mcp_token(TOKEN)
+    result = CliRunner().invoke(app, ["mcp-check", "--url", http_server, "--timeout", "5"])
+    assert result.exit_code == 0, result.output
+    assert "调用 get_persona" in result.output and "全部通过" in result.output
+    assert TOKEN not in result.output
+
+
+def test_mcp_check_reports_stuck_step(http_server, monkeypatch):
+    from agent_accounts.core import persona
+
+    def slow_load():
+        time.sleep(3)  # 模拟调用卡住（如代理缓冲了响应）
+        return "p"
+
+    monkeypatch.setattr(persona, "load", slow_load)
+    config.write_mcp_token(TOKEN)
+    result = CliRunner().invoke(app, ["mcp-check", "--url", http_server, "--timeout", "1"])
+    assert result.exit_code == 1
+    assert "✅ 列出工具" in result.output and "❌ 调用 get_persona" in result.output
+    assert "超时" in result.output
+
+
+def test_mcp_check_wrong_token(http_server):
+    config.write_mcp_token("x" * 43)
+    result = CliRunner().invoke(app, ["mcp-check", "--url", http_server, "--timeout", "5"])
+    assert result.exit_code == 1 and "❌ 连接并握手" in result.output
+
+
+async def test_access_and_tool_log(http_server, caplog):
+    caplog.set_level("INFO", logger="agent_accounts.mcp")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    http = httpx2.AsyncClient(headers=headers, timeout=10)
+    async with http, Client(streamable_http_client(http_server, http_client=http)) as c:
+        await c.call_tool("update_recent", {"content": "不应出现在日志里"})
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "POST /mcp → 200" in text and "工具 update_recent 完成" in text
+    assert "不应出现在日志里" not in text and TOKEN not in text

@@ -28,11 +28,27 @@ def sample_video(tmp_path_factory):
 
 
 def test_frame_times_are_bounded_and_centered():
-    assert media.frame_times(24, 3, 10) == [4.0, 12.0, 20.0]
+    assert media.frame_times(24, 3, 10, interval_s=8) == [4.0, 12.0, 20.0]
     assert len(media.frame_times(600, 3, 10)) == 10
     assert len(media.frame_times(2, 3, 10)) == 3
     times = media.frame_times(80, 3, 10)
     assert times[0] > 0 and times[-1] < 80
+
+
+@pytest.mark.parametrize("duration", [24, 118, 600, 3600])
+def test_frame_times_cover_whole_video(duration):
+    """不论多长都从头覆盖到尾：相邻两帧间隔一致，最后一帧落在最后一段里。"""
+    times = media.frame_times(duration, 3, 30, interval_s=5)
+    n = len(times)
+    assert n == min(30, -(-duration // 5))  # 约每 5 秒一帧，最多 30 帧
+    step = duration / n
+    assert times[0] == pytest.approx(step / 2, abs=0.01)
+    assert duration - times[-1] == pytest.approx(step / 2, abs=0.01)
+
+
+def test_clock():
+    assert media.clock(0) == "0:00" and media.clock(118) == "1:58"
+    assert media.clock(3725) == "1:02:05"
 
 
 async def test_probe_and_extract(sample_video, tmp_path):
@@ -42,8 +58,9 @@ async def test_probe_and_extract(sample_video, tmp_path):
     frames = await media.extract_frames(
         sample_video, tmp_path, min_frames=3, max_frames=10, max_side=640
     )
-    assert len(frames) == 3
-    frame_info = await media.probe(frames[0])
+    assert len(frames.paths) == 5 and frames.times == [2.4, 7.2, 12.0, 16.8, 21.6]
+    assert 23 < frames.duration_s < 25
+    frame_info = await media.probe(frames.paths[0])
     assert (frame_info.width, frame_info.height) == (640, 360)  # 长边缩到 640，保持比例
 
     audio = await media.extract_audio(sample_video, tmp_path / "a.mp3", max_seconds=10)
@@ -51,6 +68,15 @@ async def test_probe_and_extract(sample_video, tmp_path):
     audio_info = await media.probe(audio)
     assert audio_info.has_audio and not audio_info.has_video
     assert audio_info.duration_s <= 10.2
+
+
+async def test_split_audio_into_segments(sample_video, tmp_path):
+    audio = await media.extract_audio(sample_video, tmp_path / "a.mp3", max_seconds=60)
+    segments = await media.split_audio(audio, tmp_path, segment_s=10)
+    assert len(segments) == 3
+    total = sum([(await media.probe(seg)).duration_s for seg in segments])
+    assert total == pytest.approx(24, abs=0.5)  # 切段后总长不变，没有丢内容
+    assert await media.split_audio(audio, tmp_path, segment_s=60) == [audio]  # 短音轨不切
 
 
 async def test_extract_audio_returns_none_without_audio(tmp_path):
