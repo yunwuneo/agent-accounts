@@ -18,12 +18,13 @@ import os
 import re
 import stat
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
-from agent_accounts.core import paths
+from agent_accounts.core import paths, schedule
 from agent_accounts.core.errors import AgentAccountsError
 
 
@@ -55,6 +56,19 @@ class DouyinConfig(BaseModel):
     digest_per_tick: int = 3  # 每轮最多自动分析几个新分享的作品（控制成本）
     interval_min_s: int = 60  # douyin run 两轮之间的随机间隔
     interval_max_s: int = 120
+    # 休息时段（本机时间，如 ["03:00-08:00", "11:00-12:00"]）：run 和 sync --watch 在这些时间里
+    # 不开浏览器、不同步、不回复；结束后再随机晚 0–quiet_wake_jitter_s 秒醒来，积压的新消息合并处理
+    quiet_hours: list[str] = Field(default_factory=list)
+    quiet_wake_jitter_s: int = Field(default=300, ge=0)
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def _check_quiet_hours(cls, v: list[str]) -> list[str]:
+        schedule.parse_windows(v)
+        return v
+
+    def quiet_until(self, now: datetime) -> datetime | None:
+        return schedule.quiet_until(now, schedule.parse_windows(self.quiet_hours))
 
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
