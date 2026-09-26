@@ -59,5 +59,7 @@ extra_block_words = []   # 额外的禁用词
 host = "127.0.0.1"       # 只本机访问；给其他机器用时改成 0.0.0.0（明文 HTTP，只在可信内网或加密通道里用）
 port = 8765
 path = "/mcp"
+# 经反向代理 / 内网穿透（nginx、frp 等）访问时，把对外域名写进来，否则会 421 Invalid Host header
+# allowed_hosts = ["mcp.example.com"]
 # token 用 agent-accounts mcp-token 生成并自动写到这里（Windows：scripts\new-mcp-token.ps1）
 # 也可以改用环境变量：token_env = "AGENT_ACCOUNTS_MCP_TOKEN"

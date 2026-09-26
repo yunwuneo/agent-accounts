@@ -54,6 +54,8 @@ claude mcp add --transport http agent-accounts http://127.0.0.1:8765/mcp \
 Windows 上生成 token：`powershell -ExecutionPolicy Bypass -File scripts\new-mcp-token.ps1`
 （写入配置并复制到剪贴板，默认不显示；`-Rotate` 换新，`-Show` 同时显示）。
 `host` 改成非本机地址时是明文 HTTP，只在可信内网或 HTTPS 反向代理 / Tailscale 后面用。
+经 nginx / frp 等反向代理访问时，把对外域名写进 `[mcp] allowed_hosts`（如 `["mcp.example.com"]`），
+否则会返回 `421 Invalid Host header`。
 
 ## 目录
 
