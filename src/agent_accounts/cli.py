@@ -42,6 +42,14 @@ def unfreeze(platform: str = typer.Argument(...)) -> None:
     typer.secho(f"✅ {platform} 已恢复", fg="green")
 
 
+@app.command()
+def mcp() -> None:
+    """启动 MCP server（stdio）：读最近的私信往来，读写人设和近况。"""
+    from agent_accounts.mcp_server import main
+
+    main()
+
+
 config_app = typer.Typer(help="配置（~/.agent-accounts/config.toml）", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 

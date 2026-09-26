@@ -1,0 +1,136 @@
+"""MCP server（stdio）：给 Echo 用的读写接口。
+
+- 读：最近的私信往来。只读本地库，不开浏览器、不点进会话、不标记已读；
+  数据由 ``douyin sync`` / ``douyin run`` 写入，这里拿到的是最近一次同步时的内容
+- 写：更新人设和近况。两者都会在生成回复时用上；覆盖前旧版本存到 ``history/``，
+  每次更新记审计（只记字数，不记内容）
+
+发消息不在这里暴露：发送仍然只走 ``douyin run`` 的两道确认和 ``douyin reply``。
+
+启动：``agent-accounts mcp``（stdout 是协议通道，这里不能 print）。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+
+from agent_accounts.adapters.douyin import PLATFORM
+from agent_accounts.adapters.douyin import store as dstore
+from agent_accounts.core import audit, digests, persona
+
+MAX_LIMIT = 200
+
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
+)
+
+server = MCPServer(
+    name="agent-accounts",
+    instructions=(
+        "Echo 自己的平台账号。可以读最近的抖音私信往来（本地库，读取没有副作用），"
+        "以及读取和更新人设、近况（自动回复时会用上）。不能发送消息。"
+    ),
+)
+
+
+def _iso(dt) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _limit(n: int) -> int:
+    return max(1, min(n, MAX_LIMIT))
+
+
+def _conv_json(c: dstore.DouyinConversation) -> dict[str, Any]:
+    return {
+        "conv_id": c.conv_id,
+        "name": c.name,
+        "kind": c.kind,
+        "mutual": c.is_mutual,
+        "unread": c.unread,
+        "last_at": _iso(c.last_at),
+        "last_preview": c.last_preview,
+    }
+
+
+def _msg_json(m: dstore.DouyinMessage, names: dict[str, str | None]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "conv_id": m.conv_id,
+        "conversation": names.get(m.conv_id),
+        "from_me": m.from_me,
+        "sent_at": _iso(m.sent_at),
+        "type": m.type,
+        "text": m.text if m.text else m.preview(max_len=200),
+    }
+    if m.aweme_id:
+        out["share"] = {"title": m.share_title, "author": m.share_author}
+        if d := digests.get(PLATFORM, m.aweme_id):
+            out["share"]["digest"] = {"summary": d.summary, "vibe": d.vibe}
+    return out
+
+
+@server.tool(annotations=READ)
+def douyin_list_conversations(limit: int = 20) -> list[dict[str, Any]]:
+    """列出抖音私信会话（最近活跃的在前）：对方昵称、是否互关、未读数、最后一条预览。"""
+    return [_conv_json(c) for c in dstore.list_conversations()[: _limit(limit)]]
+
+
+@server.tool(annotations=READ)
+def douyin_recent_messages(conversation: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """读取最近的抖音私信往来（按时间先后排列，from_me=true 是自己发的）。
+
+    conversation 可以是 conv_id 或对方昵称（昵称包含匹配，必须唯一）；不传就返回所有会话里
+    最近的消息。分享的视频/图集如果分析过，会附上作品摘要。数据来自最近一次同步。
+    """
+    names = {c.conv_id: c.name for c in dstore.list_conversations()}
+    if conversation:
+        conv = dstore.find_conversation(conversation)
+        if conv is None:
+            raise ValueError(f"找不到会话或匹配不唯一：{conversation}")
+        msgs = dstore.list_messages(conv.conv_id, limit=_limit(limit))
+    else:
+        msgs = dstore.recent_messages(limit=_limit(limit))
+    return {"messages": [_msg_json(m, names) for m in msgs]}
+
+
+@server.tool(annotations=READ)
+def get_persona() -> dict[str, Any]:
+    """读取当前人设（生成回复时作为 system prompt 的开头）。"""
+    return {"persona": persona.load()}
+
+
+@server.tool(annotations=WRITE)
+def update_persona(content: str) -> dict[str, Any]:
+    """用 content 整体替换人设（Markdown，不能为空，最多 8000 字）。旧版本会自动备份。
+
+    先用 get_persona 读出当前内容，在它的基础上修改，而不是只写要改的那一句。
+    """
+    persona.save(content)
+    audit.record("core", "persona.update", chars=len(content.strip()), via="mcp")
+    return {"ok": True, "chars": len(content.strip())}
+
+
+@server.tool(annotations=READ)
+def get_recent() -> dict[str, Any]:
+    """读取当前的近况（最近在做什么、心情、发生了什么），以及上次更新时间。"""
+    return {"recent": persona.load_recent(), "updated_at": _iso(persona.recent_updated_at())}
+
+
+@server.tool(annotations=WRITE)
+def update_recent(content: str) -> dict[str, Any]:
+    """用 content 整体替换近况（最多 2000 字；空字符串表示清空）。旧版本会自动备份。
+
+    近况会和人设一起用于生成回复，聊天时可能被自然提到，所以只写可以对朋友说的内容，
+    不要写密码、联系方式等隐私。
+    """
+    persona.save_recent(content)
+    audit.record("core", "recent.update", chars=len(content.strip()), via="mcp")
+    return {"ok": True, "chars": len(content.strip())}
+
+
+def main() -> None:
+    server.run("stdio")

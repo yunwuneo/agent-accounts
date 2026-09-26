@@ -205,6 +205,16 @@ def find_conversation(query: str) -> DouyinConversation | None:
     return rows[0] if len(rows) == 1 else None
 
 
+def recent_messages(*, limit: int = 30) -> list[DouyinMessage]:
+    """所有会话里最近的消息（按时间先后排列）。"""
+    with store.session() as s:
+        q = select(DouyinMessage).order_by(
+            col(DouyinMessage.sent_at).desc(), col(DouyinMessage.msg_index).desc()
+        )
+        rows = s.exec(q.limit(limit)).all()
+    return list(reversed(rows))
+
+
 def list_messages(
     conv_id: str, *, limit: int = 30, since: datetime | None = None
 ) -> list[DouyinMessage]:

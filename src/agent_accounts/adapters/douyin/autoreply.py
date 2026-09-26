@@ -124,6 +124,7 @@ async def _decide_and_act(
             cfg.llm.reply,
             persona.load(),
             chat_lines(conv.conv_id, new_ids, cfg.douyin.context_messages),
+            recent=persona.load_recent(),
         )
     except ReplyError as e:
         run.audit("douyin.reply.error", conv_id=conv.conv_id, error=str(e))

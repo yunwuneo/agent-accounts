@@ -83,6 +83,32 @@ def test_run_cli_allow_send_alone_is_second_confirmation(monkeypatch):
         assert seen["mode"] == mode
 
 
+def test_sync_watch_loops_until_frozen(isolated_home, monkeypatch):
+    """--watch 每轮重新检查账号状态：冻结后下一轮直接停下（退出码 3）。"""
+    from typer.testing import CliRunner
+
+    from agent_accounts.adapters.douyin import sync as dsync
+    from agent_accounts.adapters.douyin.cli import app
+    from agent_accounts.core import store
+
+    calls = []
+
+    async def fake_sync(cfg, run, *, save_raw=False):
+        calls.append(run.id)
+        if len(calls) == 2:
+            store.set_account_status("douyin", "frozen")  # 模拟撞到风控后被冻结
+        return dsync.SyncResult(source="api")
+
+    fast = config.Config(douyin=config.DouyinConfig(interval_min_s=0, interval_max_s=0))
+    monkeypatch.setattr(config, "load", lambda: fast)
+    monkeypatch.setattr(dsync, "sync", fake_sync)
+    result = CliRunner().invoke(app, ["sync", "--watch"])
+    assert result.exit_code == 3, result.output
+    assert len(calls) == 2 and "已冻结" in result.output
+
+    assert CliRunner().invoke(app, ["sync", "--watch", "--json"]).exit_code == 1
+
+
 async def test_dry_run_records_reply_with_digest_context(conv, fake_decide):
     calls = fake_decide(
         ReplyDecision(should_reply=True, messages=["哈哈这个好看"], reason="r", confidence=0.9)
@@ -134,6 +160,23 @@ async def test_too_many_messages_blocked(conv, fake_decide):
     fake_decide(ReplyDecision(should_reply=True, messages=["a", "b", "c", "d"], confidence=0.9))
     o = await _act(conv)
     assert o.action == "blocked" and "超过 3 条" in o.detail
+
+
+async def test_recent_is_used_for_reply(conv, fake_decide, monkeypatch):
+    from agent_accounts.core import persona
+
+    persona.save_recent("这周在学吉他")
+    seen = []
+    fake_decide(ReplyDecision(should_reply=False))
+    real = autoreply.decide
+
+    async def spy(cfg, persona_text, lines, **kw):
+        seen.append(kw.get("recent"))
+        return await real(cfg, persona_text, lines, **kw)
+
+    monkeypatch.setattr(autoreply, "decide", spy)
+    await _act(conv)
+    assert seen == ["这周在学吉他"]
 
 
 def test_new_peer_messages_respects_handled_index(conv):

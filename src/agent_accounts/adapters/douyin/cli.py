@@ -168,11 +168,20 @@ def sync(
         False, help="把原始接口响应保存到 runs/<id>/raw（用于做 fixture）"
     ),
     as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+    watch: bool = typer.Option(
+        False, "--watch", help="一直同步：每轮间隔同 douyin run，不调模型、不发送，Ctrl+C 停止"
+    ),
 ) -> None:
     """打开首页拦截私信接口，新消息入库（不点进会话，不会标记已读）。"""
     import json
+    import random
+    from datetime import datetime
 
     from agent_accounts.adapters.douyin.sync import sync as do_sync
+
+    if watch and (as_json or save_raw):
+        typer.secho("--watch 不能和 --json / --save-raw 一起用", fg="red", err=True)
+        raise typer.Exit(1)
 
     async def main() -> None:
         with start_run(PLATFORM, "sync") as run:
@@ -209,7 +218,17 @@ def sync(
         mark = "✅ 未触发 mark_read" if not r.mark_read_requests else "⚠️ 出现了 mark_read 请求"
         typer.echo(mark)
 
-    _run(main())
+    async def loop() -> None:
+        # 每轮都重新 start_run：账号被冻结后下一轮就会停下；验证码/风控/登录失效直接退出
+        cfg = config.load()
+        while True:
+            typer.secho(f"[{datetime.now():%H:%M:%S}] 同步", bold=True)
+            await main()
+            await asyncio.sleep(
+                random.uniform(cfg.douyin.interval_min_s, cfg.douyin.interval_max_s)
+            )
+
+    _run(loop() if watch else main())
 
 
 @app.command()
