@@ -7,11 +7,17 @@
 
 发消息不在这里暴露：发送仍然只走 ``douyin run`` 的两道确认和 ``douyin reply``。
 
-启动：``agent-accounts mcp``（stdout 是协议通道，这里不能 print）。
+启动：
+- ``agent-accounts mcp``：stdio，由 MCP 客户端按需拉起（stdout 是协议通道，这里不能 print）
+- ``agent-accounts mcp --http``：Streamable HTTP，监听 ``[mcp] host:port/path``，
+  每个请求都要带 ``Authorization: Bearer <token>``（token 用 ``agent-accounts mcp-token`` 生成）
 """
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
+import sys
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -20,6 +26,7 @@ from mcp.types import ToolAnnotations
 from agent_accounts.adapters.douyin import PLATFORM
 from agent_accounts.adapters.douyin import store as dstore
 from agent_accounts.core import audit, digests, persona
+from agent_accounts.core.config import ConfigError, McpConfig
 
 MAX_LIMIT = 200
 
@@ -134,3 +141,71 @@ def update_recent(content: str) -> dict[str, Any]:
 
 def main() -> None:
     server.run("stdio")
+
+
+class BearerAuth:
+    """ASGI 中间件：HTTP 请求必须带正确的 ``Authorization: Bearer <token>``，否则 401。
+
+    lifespan 等非 HTTP 事件直接放行。比较用 hmac.compare_digest，防计时攻击。
+    """
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self._expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            got = headers.get(b"authorization", b"")
+            if not hmac.compare_digest(got, self._expected):
+                await _unauthorized(send)
+                return
+        await self.app(scope, receive, send)
+
+
+async def _unauthorized(send) -> None:
+    body = b'{"error": "unauthorized"}'
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"www-authenticate", b'Bearer realm="agent-accounts"'),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+def http_app(cfg: McpConfig):
+    token = cfg.bearer()
+    if not token:
+        raise ConfigError("HTTP MCP 需要 Bearer token：先运行 agent-accounts mcp-token")
+    app = server.streamable_http_app(streamable_http_path=cfg.path, host=cfg.host)
+    return BearerAuth(app, token)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def main_http(cfg: McpConfig) -> None:
+    import uvicorn
+
+    app = http_app(cfg)
+    url = f"http://{cfg.host}:{cfg.port}{cfg.path}"
+    print(f"MCP HTTP server：{url}（Bearer 鉴权）", file=sys.stderr)
+    if not _is_loopback(cfg.host):
+        print(
+            "⚠️ 监听的不是本机地址：流量是明文 HTTP，token 和私信内容会在网络上以明文传输。"
+            "只在可信内网使用，或放在 HTTPS 反向代理 / Tailscale 等加密通道后面。",
+            file=sys.stderr,
+        )
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")

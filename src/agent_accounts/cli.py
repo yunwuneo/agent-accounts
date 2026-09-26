@@ -43,11 +43,53 @@ def unfreeze(platform: str = typer.Argument(...)) -> None:
 
 
 @app.command()
-def mcp() -> None:
-    """启动 MCP server（stdio）：读最近的私信往来，读写人设和近况。"""
-    from agent_accounts.mcp_server import main
+def mcp(
+    http: bool = typer.Option(
+        False, "--http", help="以 HTTP 启动（Bearer 鉴权，地址见配置 [mcp]）；默认 stdio"
+    ),
+    host: str | None = typer.Option(None, help="覆盖 [mcp] host（仅 --http）"),
+    port: int | None = typer.Option(None, help="覆盖 [mcp] port（仅 --http）"),
+) -> None:
+    """启动 MCP server：读最近的私信往来，读写人设和近况。"""
+    from agent_accounts import mcp_server
+    from agent_accounts.core import config
 
-    main()
+    if not http:
+        mcp_server.main()
+        return
+    try:
+        cfg = config.load().mcp
+        if host is not None:
+            cfg.host = host
+        if port is not None:
+            cfg.port = port
+        mcp_server.main_http(cfg)
+    except config.ConfigError as e:
+        typer.secho(f"⚙️ {e}", fg="red", err=True)
+        raise typer.Exit(4) from None
+
+
+@app.command("mcp-token")
+def mcp_token(
+    rotate: bool = typer.Option(False, "--rotate", help="已有 token 时换一个新的（旧的立即失效）"),
+) -> None:
+    """生成 HTTP MCP 的 Bearer token 并写入配置 [mcp] 段。
+
+    token 只输出到 stdout（一行），提示信息走 stderr，方便脚本捕获后放进剪贴板。
+    """
+    import secrets
+
+    from agent_accounts.core import config
+
+    token = secrets.token_urlsafe(32)
+    try:
+        path = config.write_mcp_token(token, rotate=rotate)
+    except config.ConfigError as e:
+        typer.secho(f"⚙️ {e}", fg="red", err=True)
+        raise typer.Exit(4) from None
+    audit.record("core", "mcp.token", rotate=rotate)
+    typer.secho(f"已写入 {path} 的 [mcp] 段", err=True)
+    typer.echo(token)
 
 
 config_app = typer.Typer(help="配置（~/.agent-accounts/config.toml）", no_args_is_help=True)
@@ -97,6 +139,7 @@ def config_show() -> None:
             f"[{name}] model={info['model']}  base_url={info['base_url']}  key={info['key']}"
         )
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
+    typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 
 
 @app.command("alert-test")

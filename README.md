@@ -36,7 +36,24 @@ uv run agent-accounts freeze douyin   # 一键冻结，之后一切自动化操�
 - 人设和近况都会用于生成自动回复；覆盖前旧版本存到 `~/.agent-accounts/history/`，审计只记字数
 - 不提供发送工具，发送仍只走 `douyin run --allow-send` 和 `douyin reply`
 
-Claude Code 里注册：`claude mcp add agent-accounts -- uv run --directory <仓库路径> agent-accounts mcp`
+**stdio**（本机，由客户端按需拉起，没有端口）：
+
+```bash
+claude mcp add agent-accounts -- uv run --directory <仓库路径> agent-accounts mcp
+```
+
+**HTTP**（常驻进程，Bearer token 鉴权，默认 `http://127.0.0.1:8765/mcp`，地址在配置 `[mcp]` 段）：
+
+```bash
+uv run agent-accounts mcp-token            # 生成 token 写入配置，token 输出到 stdout；--rotate 换新
+uv run agent-accounts mcp --http           # 启动；--host / --port 可临时覆盖
+claude mcp add --transport http agent-accounts http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+Windows 上生成 token：`powershell -ExecutionPolicy Bypass -File scripts\new-mcp-token.ps1`
+（写入配置并复制到剪贴板，默认不显示；`-Rotate` 换新，`-Show` 同时显示）。
+`host` 改成非本机地址时是明文 HTTP，只在可信内网或 HTTPS 反向代理 / Tailscale 后面用。
 
 ## 目录
 
@@ -48,5 +65,5 @@ src/agent_accounts/
   adapters/
     douyin/    selectors · page · login · doctor · im(接口解析) · store · sync · spike · cli
   mcp_server.py  MCP server（stdio）
-scripts/       make_douyin_fixtures.py（真实响应 → 脱敏 fixture）
+scripts/       make_douyin_fixtures.py（真实响应 → 脱敏 fixture） · new-mcp-token.ps1（Windows 生成 MCP token）
 ```

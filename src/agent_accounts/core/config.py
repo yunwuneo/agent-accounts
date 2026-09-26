@@ -185,6 +185,59 @@ class AlertsConfig(BaseModel):
         return f"{source}（{'已设置' if self.url() else '未设置'}），min_level={self.min_level}"
 
 
+MIN_TOKEN_CHARS = 32
+
+
+class McpConfig(BaseModel):
+    """HTTP MCP server（``agent-accounts mcp --http``）。stdio 模式不用这些。
+
+    token 是 Bearer 鉴权用的密钥：用 ``agent-accounts mcp-token`` 生成并写入（文件须私有），
+    也可写 ``token_env`` 指定环境变量名。没有 token 时拒绝以 HTTP 启动。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"  # 只本机访问；给其他机器用时改成 0.0.0.0 或具体网卡地址
+    port: int = Field(default=8765, ge=1, le=65535)
+    path: str = "/mcp"
+    token: SecretStr | None = None
+    token_env: str | None = None
+
+    @field_validator("token_env")
+    @classmethod
+    def _env_name(cls, v: str | None) -> str | None:
+        if v is not None and not _ENV_NAME.fullmatch(v):
+            raise ValueError("token_env 应该是环境变量名；token 本身请写在 token")
+        return v
+
+    @field_validator("token")
+    @classmethod
+    def _strong(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is not None and len(v.get_secret_value()) < MIN_TOKEN_CHARS:
+            raise ValueError(f"token 太短（至少 {MIN_TOKEN_CHARS} 个字符），用 mcp-token 生成")
+        return v
+
+    def bearer(self) -> str | None:
+        if self.token is not None:
+            return self.token.get_secret_value()
+        if self.token_env:
+            value = os.environ.get(self.token_env) or None
+            if value and len(value) < MIN_TOKEN_CHARS:
+                raise ConfigError(f"环境变量 {self.token_env} 里的 token 太短")
+            return value
+        return None
+
+    def describe(self) -> str:
+        if self.token is not None:
+            source = "token"
+        elif self.token_env:
+            source = f"${self.token_env}"
+        else:
+            source = None
+        auth = f"{source}（{'已设置' if self.bearer() else '未设置'}）" if source else "未配置"
+        return f"http://{self.host}:{self.port}{self.path}  Bearer token={auth}"
+
+
 class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     douyin: DouyinConfig = Field(default_factory=DouyinConfig)
@@ -193,9 +246,10 @@ class Config(BaseModel):
     media: MediaConfig = Field(default_factory=MediaConfig)
     guard: GuardConfig = Field(default_factory=GuardConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
 
 
-_PLAIN_SECRETS = {"api_key", "webhook_url"}
+_PLAIN_SECRETS = {"api_key", "webhook_url", "token"}
 
 
 def _contains_plain_key(data: dict) -> bool:
@@ -238,3 +292,57 @@ def load() -> Config:
             for err in e.errors(include_input=False, include_url=False)
         )
         raise ConfigError(f"{path} 有误：{problems}") from None
+
+
+# 行首空白只能是空格/制表符：\s 在 re.M 下会吞掉前一行的换行
+_SECTION = re.compile(r"^[ \t]*\[mcp\][ \t]*(#.*)?$", re.M)
+_HEADER = re.compile(r"^[ \t]*\[", re.M)
+_TOKEN_LINE = re.compile(r"^[ \t]*token[ \t]*=.*$", re.M)
+
+
+def write_mcp_token(token: str, *, rotate: bool = False) -> Path:
+    """把 token 写进配置文件的 [mcp] 段，保留文件里其他内容和注释。
+
+    已有 token 时只有 rotate=True 才覆盖。写入前用 tomllib 校验结果，出错就不写。
+    文件不存在时新建（POSIX 上权限 600）。
+    """
+    if len(token) < MIN_TOKEN_CHARS or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+        raise ConfigError("token 格式不对")
+    path = paths.config_path()
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        raise ConfigError(f"{path} 不是合法的 TOML，先修好再生成 token") from None
+    mcp = data.get("mcp", {})
+    if isinstance(mcp, dict) and mcp.get("token") and not rotate:
+        raise ConfigError("[mcp] 已经有 token；要换新的请加 --rotate（旧 token 立即失效）")
+
+    line = f'token = "{token}"'
+    if m := _SECTION.search(text):
+        start = m.end()
+        nxt = _HEADER.search(text, start)
+        end = nxt.start() if nxt else len(text)
+        body = text[start:end]
+        if _TOKEN_LINE.search(body):
+            body = _TOKEN_LINE.sub(line, body, count=1)
+        else:
+            body = f"\n{line}" + body
+        new = text[:start] + body + text[end:]
+    else:
+        new = text.rstrip("\n") + ("\n\n" if text.strip() else "") + f"[mcp]\n{line}\n"
+
+    try:
+        written = tomllib.loads(new).get("mcp", {}).get("token")
+    except tomllib.TOMLDecodeError:
+        written = None
+    if written != token:
+        raise ConfigError(f"{path} 的 [mcp] 段结构特殊，无法自动写入，请手动编辑")
+
+    paths.ensure_dir(path.parent)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(new, encoding="utf-8")
+    if POSIX:
+        tmp.chmod(0o600)
+    os.replace(tmp, path)
+    return path
