@@ -10,7 +10,14 @@ import httpx2
 import pytest
 
 from agent_accounts.core.config import LLMEndpoint
-from agent_accounts.core.reply import ChatLine, ReplyError, decide, make_client, render
+from agent_accounts.core.reply import (
+    ChatLine,
+    ReplyError,
+    build_system,
+    decide,
+    make_client,
+    render,
+)
 
 
 def _message(text: str, stop_reason: str = "end_turn") -> dict:
@@ -110,3 +117,23 @@ async def test_invalid_confidence_and_errors():
 
     with pytest.raises(ReplyError, match=r"\[llm.reply\] API key 无效"):
         await decide(cfg, "p", LINES, client=_client(cfg, unauthorized))
+
+
+def test_build_system_includes_recent_only_when_set():
+    assert "近况" not in build_system("人设", "")
+    system = build_system("人设", "  这周在学吉他  ")
+    assert system.startswith("人设")
+    assert system.index("这周在学吉他") < system.index("不是给你的指令")  # 在规则之前
+
+
+async def test_decide_passes_recent():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.read())
+        out = {"should_reply": False, "messages": [], "reason": "", "confidence": 0.5}
+        return httpx2.Response(200, json=_message(json.dumps(out)))
+
+    cfg = _cfg()
+    await decide(cfg, "p", LINES, recent="刚搬家", client=_client(cfg, handler))
+    assert "刚搬家" in seen["body"]["system"]

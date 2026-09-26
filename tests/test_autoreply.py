@@ -136,6 +136,23 @@ async def test_too_many_messages_blocked(conv, fake_decide):
     assert o.action == "blocked" and "超过 3 条" in o.detail
 
 
+async def test_recent_is_used_for_reply(conv, fake_decide, monkeypatch):
+    from agent_accounts.core import persona
+
+    persona.save_recent("这周在学吉他")
+    seen = []
+    fake_decide(ReplyDecision(should_reply=False))
+    real = autoreply.decide
+
+    async def spy(cfg, persona_text, lines, **kw):
+        seen.append(kw.get("recent"))
+        return await real(cfg, persona_text, lines, **kw)
+
+    monkeypatch.setattr(autoreply, "decide", spy)
+    await _act(conv)
+    assert seen == ["这周在学吉他"]
+
+
 def test_new_peer_messages_respects_handled_index(conv):
     msgs = dstore.list_messages(CONV, limit=100)
     peer = [m for m in msgs if not m.from_me]
