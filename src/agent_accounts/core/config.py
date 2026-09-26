@@ -200,8 +200,20 @@ class McpConfig(BaseModel):
     host: str = "127.0.0.1"  # 只本机访问；给其他机器用时改成 0.0.0.0 或具体网卡地址
     port: int = Field(default=8765, ge=1, le=65535)
     path: str = "/mcp"
+    # 经过反向代理 / 内网穿透访问时，请求的 Host 是对外域名（如 mcp.example.com），
+    # 要列在这里，否则 SDK 的 DNS rebinding 防护会返回 421 Invalid Host header。
+    # 写域名即可（不带协议）；带端口的写法如 "example.com:8443" 也支持
+    allowed_hosts: list[str] = Field(default_factory=list)
     token: SecretStr | None = None
     token_env: str | None = None
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _bare_hosts(cls, v: list[str]) -> list[str]:
+        for h in v:
+            if not h or "/" in h or h != h.strip():
+                raise ValueError("allowed_hosts 只写域名或 域名:端口，不带 http:// 和路径")
+        return v
 
     @field_validator("token_env")
     @classmethod
@@ -235,7 +247,8 @@ class McpConfig(BaseModel):
         else:
             source = None
         auth = f"{source}（{'已设置' if self.bearer() else '未设置'}）" if source else "未配置"
-        return f"http://{self.host}:{self.port}{self.path}  Bearer token={auth}"
+        extra = f"  allowed_hosts={self.allowed_hosts}" if self.allowed_hosts else ""
+        return f"http://{self.host}:{self.port}{self.path}  Bearer token={auth}{extra}"
 
 
 class Config(BaseModel):

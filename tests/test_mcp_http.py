@@ -120,8 +120,9 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def http_server(isolated_home):
-    cfg = config.McpConfig(port=_free_port(), token=TOKEN)
+def http_server(request, isolated_home):
+    extra = getattr(request, "param", {})
+    cfg = config.McpConfig(port=_free_port(), token=TOKEN, **extra)
     server = uvicorn.Server(
         uvicorn.Config(http_app(cfg), host=cfg.host, port=cfg.port, log_level="error")
     )
@@ -153,3 +154,44 @@ def test_config_show_hides_token(isolated_home):
     result = CliRunner().invoke(app, ["config", "show"])
     assert result.exit_code == 0 and TOKEN not in result.output
     assert "token（已设置）" in result.output
+
+
+INIT = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    },
+}
+
+
+async def _post_via_proxy(url: str, host: str) -> int:
+    """模拟 nginx / frp 转发：连的是本机端口，Host 头是对外域名。"""
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Host": host,
+        "Accept": "application/json, text/event-stream",
+    }
+    async with httpx2.AsyncClient(timeout=10) as http:
+        r = await http.post(url, json=INIT, headers=headers)
+    return r.status_code
+
+
+async def test_proxy_host_rejected_without_allowed_hosts(http_server):
+    assert await _post_via_proxy(http_server, "mcp.example.com") == 421
+
+
+@pytest.mark.parametrize("http_server", [{"allowed_hosts": ["mcp.example.com"]}], indirect=True)
+async def test_proxy_host_allowed(http_server):
+    assert await _post_via_proxy(http_server, "mcp.example.com") == 200
+    assert await _post_via_proxy(http_server, "mcp.example.com:443") == 200
+    assert await _post_via_proxy(http_server, "evil.example.com") == 421  # 防护仍然开启
+    assert await _post_via_proxy(http_server, http_server.split("/")[2]) == 200  # 本机直连照常
+
+
+def test_allowed_hosts_rejects_urls():
+    with pytest.raises(ValueError, match="不带 http"):
+        config.McpConfig(allowed_hosts=["https://mcp.example.com"])

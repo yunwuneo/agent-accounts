@@ -21,6 +21,7 @@ import sys
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from agent_accounts.adapters.douyin import PLATFORM
@@ -179,11 +180,33 @@ async def _unauthorized(send) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+
+
+def transport_security(cfg: McpConfig) -> TransportSecuritySettings | None:
+    """DNS rebinding 防护：只接受 Host 在白名单里的请求。
+
+    没配 allowed_hosts 时用 SDK 默认（监听本机时只认 127.0.0.1 / localhost）。
+    配了就在本机地址之外再放行这些对外域名（反向代理 / 内网穿透场景），防护仍然开启。
+    """
+    if not cfg.allowed_hosts:
+        return None
+    hosts, origins = list(LOOPBACK_HOSTS), [f"http://{h}" for h in LOOPBACK_HOSTS]
+    for h in cfg.allowed_hosts:
+        hosts += [h, f"{h}:*"]
+        origins += [f"https://{h}", f"http://{h}", f"https://{h}:*", f"http://{h}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
+    )
+
+
 def http_app(cfg: McpConfig):
     token = cfg.bearer()
     if not token:
         raise ConfigError("HTTP MCP 需要 Bearer token：先运行 agent-accounts mcp-token")
-    app = server.streamable_http_app(streamable_http_path=cfg.path, host=cfg.host)
+    app = server.streamable_http_app(
+        streamable_http_path=cfg.path, host=cfg.host, transport_security=transport_security(cfg)
+    )
     return BearerAuth(app, token)
 
 
