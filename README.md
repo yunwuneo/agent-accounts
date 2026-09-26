@@ -57,6 +57,11 @@ Windows 上生成 token：`powershell -ExecutionPolicy Bypass -File scripts\new-
 经 nginx / frp 等反向代理访问时，把对外域名写进 `[mcp] allowed_hosts`（如 `["mcp.example.com"]`），
 否则会返回 `421 Invalid Host header`。
 
+排查连接问题：`uv run agent-accounts mcp-check`（默认检查本机）和 `--url https://<对外域名>/mcp`（经代理），
+逐步报告握手 / 列工具 / 调用工具的耗时和卡在哪一步。`mcp --http` 的控制台会逐行记录请求和工具调用
+（只记方法、状态、耗时，不记内容）。Windows 控制台开着「快速编辑模式」时，在窗口里点一下会暂停输出，
+进程也会跟着卡住，按 Esc 或回车恢复；常驻运行建议关掉该模式。
+
 ## 目录
 
 ```

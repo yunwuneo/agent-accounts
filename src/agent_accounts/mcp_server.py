@@ -15,9 +15,13 @@
 
 from __future__ import annotations
 
+import functools
 import hmac
 import ipaddress
+import logging
 import sys
+import time
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -43,6 +47,29 @@ server = MCPServer(
         "以及读取和更新人设、近况（自动回复时会用上）。不能发送消息。"
     ),
 )
+
+
+# 只记方法、工具名、状态和耗时，不记参数和返回内容（私信、人设）
+log = logging.getLogger("agent_accounts.mcp")
+
+
+def _logged[F: Callable[..., Any]](fn: F) -> F:
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.monotonic()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as e:
+            log.warning("工具 %s 出错（%s），%.2fs", fn.__name__, type(e).__name__, _since(start))
+            raise
+        log.info("工具 %s 完成，%.2fs", fn.__name__, _since(start))
+        return result
+
+    return wrapper  # type: ignore[return-value]
+
+
+def _since(start: float) -> float:
+    return time.monotonic() - start
 
 
 def _iso(dt) -> str | None:
@@ -82,12 +109,14 @@ def _msg_json(m: dstore.DouyinMessage, names: dict[str, str | None]) -> dict[str
 
 
 @server.tool(annotations=READ)
+@_logged
 def douyin_list_conversations(limit: int = 20) -> list[dict[str, Any]]:
     """列出抖音私信会话（最近活跃的在前）：对方昵称、是否互关、未读数、最后一条预览。"""
     return [_conv_json(c) for c in dstore.list_conversations()[: _limit(limit)]]
 
 
 @server.tool(annotations=READ)
+@_logged
 def douyin_recent_messages(conversation: str | None = None, limit: int = 20) -> dict[str, Any]:
     """读取最近的抖音私信往来（按时间先后排列，from_me=true 是自己发的）。
 
@@ -106,12 +135,14 @@ def douyin_recent_messages(conversation: str | None = None, limit: int = 20) -> 
 
 
 @server.tool(annotations=READ)
+@_logged
 def get_persona() -> dict[str, Any]:
     """读取当前人设（生成回复时作为 system prompt 的开头）。"""
     return {"persona": persona.load()}
 
 
 @server.tool(annotations=WRITE)
+@_logged
 def update_persona(content: str) -> dict[str, Any]:
     """用 content 整体替换人设（Markdown，不能为空，最多 8000 字）。旧版本会自动备份。
 
@@ -123,12 +154,14 @@ def update_persona(content: str) -> dict[str, Any]:
 
 
 @server.tool(annotations=READ)
+@_logged
 def get_recent() -> dict[str, Any]:
     """读取当前的近况（最近在做什么、心情、发生了什么），以及上次更新时间。"""
     return {"recent": persona.load_recent(), "updated_at": _iso(persona.recent_updated_at())}
 
 
 @server.tool(annotations=WRITE)
+@_logged
 def update_recent(content: str) -> dict[str, Any]:
     """用 content 整体替换近况（最多 2000 字；空字符串表示清空）。旧版本会自动备份。
 
@@ -142,6 +175,41 @@ def update_recent(content: str) -> dict[str, Any]:
 
 def main() -> None:
     server.run("stdio")
+
+
+class AccessLog:
+    """ASGI 中间件：每个 HTTP 请求结束时记一行（来源、方法、路径、状态、耗时）。
+
+    SSE 推送流（GET）会一直开着，开始时也记一行，便于判断客户端是否连上。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        start, status = time.monotonic(), None
+        client = scope.get("client") or ("?", 0)
+        headers = dict(scope.get("headers") or [])
+        # 经 nginx 转发时真实来源在 X-Forwarded-For / X-Real-IP 里
+        origin = (headers.get(b"x-forwarded-for") or headers.get(b"x-real-ip") or b"").decode()
+        who = origin.split(",")[0].strip() or client[0]
+        line = f"{who} {scope['method']} {scope['path']}"
+
+        async def send_logged(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                if scope["method"] == "GET" and status == 200:
+                    log.info("%s → %s（推送流已打开）", line, status)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_logged)
+        finally:
+            log.info("%s → %s，%.2fs", line, status or "未响应", _since(start))
 
 
 class BearerAuth:
@@ -207,7 +275,7 @@ def http_app(cfg: McpConfig):
     app = server.streamable_http_app(
         streamable_http_path=cfg.path, host=cfg.host, transport_security=transport_security(cfg)
     )
-    return BearerAuth(app, token)
+    return AccessLog(BearerAuth(app, token))
 
 
 def _is_loopback(host: str) -> bool:
@@ -222,6 +290,11 @@ def _is_loopback(host: str) -> bool:
 def main_http(cfg: McpConfig) -> None:
     import uvicorn
 
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
     app = http_app(cfg)
     url = f"http://{cfg.host}:{cfg.port}{cfg.path}"
     print(f"MCP HTTP server：{url}（Bearer 鉴权）", file=sys.stderr)
