@@ -205,6 +205,11 @@ def config_show() -> None:
         typer.echo(
             f"[{name}] model={info['model']}  base_url={info['base_url']}  key={info['key']}"
         )
+    m = cfg.media
+    typer.echo(
+        f"[media（看视频）] 约每 {m.frame_interval_s:g} 秒一帧，最多 {m.max_frames} 帧；"
+        f"语音最多转写 {m.max_video_seconds} 秒，每段 {m.transcribe_segment_s} 秒"
+    )
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
     typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 

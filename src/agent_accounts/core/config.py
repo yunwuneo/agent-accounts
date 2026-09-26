@@ -125,11 +125,15 @@ class TranscribeConfig(Endpoint):
 
 
 class MediaConfig(BaseModel):
-    max_frames: int = 10  # 视频最多抽几帧
+    # 抽帧：整段视频均匀切段、每段取一帧，约每 frame_interval_s 秒一帧，总数不超过 max_frames。
+    # 视频再长也覆盖从头到尾，只是帧间隔变大
+    frame_interval_s: float = Field(default=5.0, gt=0)
+    max_frames: int = 30
     min_frames: int = 3
     frame_width: int = 768  # 抽帧缩放宽度，控制图片 token 数
     max_images: int = 12  # 图集最多用几张
-    max_video_seconds: int = 600  # 超过的视频只取前面这段做转写
+    max_video_seconds: int = 3600  # 语音转写最多取多长（超过的部分在摘要里注明没听到）
+    transcribe_segment_s: int = 600  # 长音轨分段转写，每段秒数（避开转写接口的文件大小上限）
 
 
 class GuardConfig(BaseModel):

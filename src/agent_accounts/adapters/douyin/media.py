@@ -39,6 +39,7 @@ class DouyinMedia:
     hashtags: list[str] = field(default_factory=list)
     duration_s: float | None = None
     video_url: str | None = None
+    video_urls: list[str] = field(default_factory=list)  # 候选地址，下载不完整时换下一个
     image_urls: list[str] = field(default_factory=list)
     cover_url: str | None = None
     music_title: str | None = None
@@ -73,8 +74,12 @@ def _first_url(obj: dict[str, Any] | None) -> str | None:
     return urls[0] if urls else None
 
 
-def select_video_url(video: dict[str, Any]) -> str | None:
-    """选短边 ≥ 720 的 mp4 里体积最小的一档；dash 可能只有画面没有声音，不选。"""
+def select_video_urls(video: dict[str, Any]) -> list[str]:
+    """候选下载地址，按优先级排序（去重）。
+
+    首选短边 ≥ 720 的 mp4 里体积最小的一档；都不到 720p 时按清晰度从高到低。dash 可能只有
+    画面没有声音，不选。每一档的 url_list 里通常有几个 CDN 镜像，都作为候选，最后是 play_addr。
+    """
     candidates = []
     for br in video.get("bit_rate") or []:
         addr = br.get("play_addr") or {}
@@ -83,11 +88,18 @@ def select_video_url(video: dict[str, Any]) -> str | None:
         side = min(addr.get("width") or 0, addr.get("height") or 0)
         candidates.append((side >= MIN_FRAME_SIDE, addr.get("data_size") or 0, side, addr))
     good = sorted((c for c in candidates if c[0]), key=lambda c: c[1])
-    if good:
-        return _first_url(good[0][3])
-    if candidates:  # 都不到 720p 时选最大的
-        return _first_url(max(candidates, key=lambda c: c[2])[3])
-    return _first_url(video.get("play_addr"))
+    rest = sorted((c for c in candidates if not c[0]), key=lambda c: -c[2])
+    urls: list[str] = []
+    for addr in [c[3] for c in good + rest] + [video.get("play_addr") or {}]:
+        for u in addr.get("url_list") or []:
+            if u not in urls:
+                urls.append(u)
+    return urls
+
+
+def select_video_url(video: dict[str, Any]) -> str | None:
+    urls = select_video_urls(video)
+    return urls[0] if urls else None
 
 
 def parse_aweme(d: dict[str, Any], kind_hint: Kind | None = None) -> DouyinMedia:
@@ -103,6 +115,7 @@ def parse_aweme(d: dict[str, Any], kind_hint: Kind | None = None) -> DouyinMedia
         hashtags=[t["hashtag_name"] for t in d.get("text_extra") or [] if t.get("hashtag_name")],
         duration_s=duration_ms / 1000 if duration_ms else None,
         video_url=None if is_note else select_video_url(video),
+        video_urls=[] if is_note else select_video_urls(video),
         image_urls=[u for img in images if (u := _first_url(img))],
         cover_url=_first_url(video.get("cover") or video.get("origin_cover")),
         music_title=(d.get("music") or {}).get("title") or None,

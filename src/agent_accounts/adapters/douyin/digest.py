@@ -3,6 +3,11 @@
 流程：查缓存 → 打开作品页拿作品信息 → 下载到临时目录 → 视频抽帧 + 抽音轨转写 / 图集转 JPEG
 → 多模态理解 → 入库。临时目录处理完立即删除（草案：视频只用于临时分析，不保存）。
 
+不在浏览器里「播放」视频：下载整个文件后离线分析，尽量覆盖从头到尾——
+- 下载后用 ffprobe 核对时长，比作品时长短（CDN 返回不完整）就换候选地址重下
+- 抽帧均匀覆盖整段视频（约每 5 秒一帧，上限见 [media]），每帧带时间点
+- 音轨分段转写，整段都听；超出上限或下载不完整的部分会在摘要里注明没看到/没听到
+
 作品不可见（仅作者可见、审核中等）时，用私信分享卡片里的标题、作者、封面生成摘要，并在
 notes 里说明。语音转写失败或没配置时不中断，只在 notes 里记录。
 """
@@ -85,6 +90,89 @@ class DigestOutcome:
     error: str | None = None
 
 
+MAX_VIDEO_TRIES = 3  # 下载不完整时最多试几个候选地址
+VIDEO_DOWNLOAD_TIMEOUT_S = 600  # 长视频文件大，给足下载时间
+
+
+def _short_by(got: float, expected: float | None) -> bool:
+    """下载到的时长明显短于作品时长（允许 2 秒或 3% 的误差）。"""
+    return bool(expected) and got < expected - max(2.0, expected * 0.03)  # type: ignore[operator]
+
+
+async def _download_full_video(
+    s: BrowserSession, m: dmedia.DouyinMedia, tmp: Path, notes: list[str]
+) -> Path | None:
+    """依次尝试候选地址，直到拿到完整的视频；都不完整时用最长的那个，并在 notes 里说明。"""
+    urls = (m.video_urls or ([m.video_url] if m.video_url else []))[:MAX_VIDEO_TRIES]
+    best: tuple[float, Path] | None = None
+    last_error = ""
+    for i, url in enumerate(urls):
+        dest = tmp / f"video_{i}.mp4"
+        try:
+            await dmedia.download(s, url, dest, timeout_s=VIDEO_DOWNLOAD_TIMEOUT_S)
+            got = (await media.probe(dest)).duration_s or 0.0
+        except HumanRequired:
+            raise
+        except Exception as e:  # 这个地址下载或解析失败，换下一个
+            last_error = type(e).__name__
+            dest.unlink(missing_ok=True)
+            continue
+        if best is None or got > best[0]:
+            if best:
+                best[1].unlink(missing_ok=True)
+            best = (got, dest)
+        else:
+            dest.unlink(missing_ok=True)
+        if not _short_by(got, m.duration_s):
+            break
+    if best is None:
+        if urls:
+            raise RuntimeError(f"视频下载失败（{last_error}）")
+        return None
+    if _short_by(best[0], m.duration_s):
+        notes.append(
+            f"下载到的视频只有 {media.clock(best[0])}，作品时长 {media.clock(m.duration_s or 0)}，"
+            "后面的内容没有看到"
+        )
+    return best[1]
+
+
+async def _transcribe_full(
+    cfg: Config, video: Path, duration_s: float | None, tmp: Path, notes: list[str]
+) -> str | None:
+    """整段音轨分段转写，按段落拼接并标出时间范围。"""
+    limit = cfg.media.max_video_seconds
+    audio = await media.extract_audio(video, tmp / "audio.mp3", max_seconds=limit)
+    if audio is None:
+        notes.append("视频没有音轨")
+        return None
+    if duration_s and duration_s > limit:
+        notes.append(f"语音只转写了前 {media.clock(limit)}，之后的没有听到")
+    seg_s = cfg.media.transcribe_segment_s
+    segments = await media.split_audio(audio, tmp, segment_s=seg_s)
+    parts: list[str] = []
+    for i, seg in enumerate(segments):
+        try:
+            text = await transcribe(cfg.transcribe, seg)
+        except ConfigError as e:
+            notes.append(f"语音转写失败：{e}")
+            return None
+        except TranscribeError as e:
+            if len(segments) == 1:
+                notes.append(f"语音转写失败：{e}")
+                return None
+            span = f"{media.clock(i * seg_s)}–{media.clock((i + 1) * seg_s)}"
+            notes.append(f"{span} 这段语音转写失败：{e}")
+            continue
+        if text:
+            if len(segments) == 1:
+                parts.append(text)
+            else:
+                end = min((i + 1) * seg_s, duration_s or (i + 1) * seg_s)
+                parts.append(f"[{media.clock(i * seg_s)}–{media.clock(end)}] {text}")
+    return "\n".join(parts) or None
+
+
 async def _build_input(
     s: BrowserSession, cfg: Config, m: dmedia.DouyinMedia, tmp: Path
 ) -> tuple[UnderstandInput, list[str]]:
@@ -97,26 +185,22 @@ async def _build_input(
         duration_s=m.duration_s,
         music_title=m.music_title,
     )
-    if m.kind == "video" and m.video_url:
-        video = await dmedia.download(s, m.video_url, tmp / "video.mp4")
-        inp.images = await media.extract_frames(
+    video = await _download_full_video(s, m, tmp, notes) if m.kind == "video" else None
+    if video is not None:
+        frames = await media.extract_frames(
             video,
             tmp,
             min_frames=cfg.media.min_frames,
             max_frames=cfg.media.max_frames,
             max_side=cfg.media.frame_width,
+            interval_s=cfg.media.frame_interval_s,
         )
-        audio = await media.extract_audio(
-            video, tmp / "audio.mp3", max_seconds=cfg.media.max_video_seconds
-        )
+        inp.images, inp.frame_times = frames.paths, frames.times
+        inp.duration_s = inp.duration_s or frames.duration_s
+        inp.transcript = await _transcribe_full(cfg, video, frames.duration_s, tmp, notes)
         video.unlink()
-        if audio is None:
-            notes.append("视频没有音轨")
-        else:
-            try:
-                inp.transcript = await transcribe(cfg.transcribe, audio) or None
-            except (ConfigError, TranscribeError) as e:
-                notes.append(f"语音转写失败：{e}")
+        # 覆盖不完整的情况也告诉模型，避免它把没看到的部分当作不存在
+        inp.notes.extend(n for n in notes if "没有看到" in n or "没有听到" in n)
     elif m.kind == "video":
         notes.append("没有拿到视频播放地址，只根据文字信息理解")
     elif m.kind == "note":
