@@ -85,7 +85,7 @@ def test_run_cli_allow_send_alone_is_second_confirmation(monkeypatch):
 
 async def test_dry_run_records_reply_with_digest_context(conv, fake_decide):
     calls = fake_decide(
-        ReplyDecision(should_reply=True, text="哈哈这个好看", reason="r", confidence=0.9)
+        ReplyDecision(should_reply=True, messages=["哈哈这个好看"], reason="r", confidence=0.9)
     )
     peer_share = next(m for m in reversed(dstore.list_messages(CONV, limit=100)) if m.aweme_id)
     digests.save(
@@ -102,7 +102,7 @@ async def test_dry_run_records_reply_with_digest_context(conv, fake_decide):
 
 
 async def test_not_mutual_is_blocked_before_calling_model(conv, fake_decide):
-    calls = fake_decide(ReplyDecision(should_reply=True, text="x", confidence=1))
+    calls = fake_decide(ReplyDecision(should_reply=True, messages=["x"], confidence=1))
     conv.peer_follow_status, conv.peer_follower_status = 1, 0
     o = await _act(conv)
     assert o.action == "blocked" and "互相关注" in o.detail
@@ -110,16 +110,30 @@ async def test_not_mutual_is_blocked_before_calling_model(conv, fake_decide):
 
 
 async def test_model_says_no(conv, fake_decide):
-    fake_decide(ReplyDecision(should_reply=False, text="", reason="对方只发了表情"))
+    fake_decide(ReplyDecision(should_reply=False, reason="对方只发了表情"))
     o = await _act(conv)
     assert o.action == "skipped" and o.reply.reason == "对方只发了表情"
 
 
 async def test_content_guard_blocks_model_output(conv, fake_decide):
-    fake_decide(ReplyDecision(should_reply=True, text="加我微信聊", reason="", confidence=0.9))
+    fake_decide(ReplyDecision(should_reply=True, messages=["好呀", "加我微信聊"], confidence=0.9))
     o = await _act(conv)
     assert o.action == "blocked" and "联系方式" in o.detail
     assert o.reply.status == "blocked"
+
+
+async def test_multiple_messages_stored_one_per_line(conv, fake_decide):
+    fake_decide(
+        ReplyDecision(should_reply=True, messages=["哈哈哈", "这个也太真实了"], confidence=0.9)
+    )
+    o = await _act(conv)
+    assert o.action == "dry_run" and o.reply.text == "哈哈哈\n这个也太真实了"
+
+
+async def test_too_many_messages_blocked(conv, fake_decide):
+    fake_decide(ReplyDecision(should_reply=True, messages=["a", "b", "c", "d"], confidence=0.9))
+    o = await _act(conv)
+    assert o.action == "blocked" and "超过 3 条" in o.detail
 
 
 def test_new_peer_messages_respects_handled_index(conv):

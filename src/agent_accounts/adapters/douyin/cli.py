@@ -357,10 +357,12 @@ def digest(
 @app.command()
 def reply(
     conv: str = typer.Argument(..., help="conv_id 或对方昵称"),
-    text: str = typer.Option(..., "--text", help="要发送的内容"),
+    texts: list[str] = typer.Option(  # noqa: B008
+        ..., "--text", help="要发送的内容；写多次 --text 就分成多条依次发送"
+    ),
     yes: bool = typer.Option(False, "--yes", help="不再确认，直接发送"),
 ) -> None:
-    """手动发送一条私信（会点进会话、标记已读；内容和频率仍受护栏限制）。"""
+    """手动发送私信（会点进会话、标记已读；内容和频率仍受护栏限制）。"""
     import json
 
     from agent_accounts.adapters.douyin import store as dstore
@@ -370,7 +372,8 @@ def reply(
     if row is None:
         typer.secho(f"找不到会话：{conv}（先运行 douyin sync）", fg="red", err=True)
         raise typer.Exit(1)
-    typer.echo(f"发送给「{row.name or row.conv_id}」：{text}")
+    text = "\n".join(texts)
+    typer.echo(f"发送给「{row.name or row.conv_id}」：{' ⏎ '.join(texts)}")
     if not yes and not typer.confirm("确认发送？"):
         raise typer.Exit(1)
 
@@ -385,6 +388,9 @@ def reply(
         raise typer.Exit(1)
     if r.status == "sent":
         typer.secho("✅ 已发送", fg="green")
+    elif r.status == "partial":
+        typer.secho(f"⚠️ 只发出一部分：{r.error}", fg="yellow")
+        raise typer.Exit(1)
     else:
         typer.secho(f"❌ 发送失败：{r.error}", fg="red")
         raise typer.Exit(1)
@@ -397,20 +403,27 @@ _ACTION = {
     "dry_run": "📝 dry_run（未发送）",
     "sent": "✅ 已发送",
     "failed": "❌ 发送失败",
+    "partial": "⚠️ 只发出一部分",
     "error": "⚠️ 出错",
     "no_new": "（没有可处理的消息）",
 }
+
+
+def _joined(text: str) -> str:
+    from agent_accounts.core.reply import split_messages
+
+    return " ⏎ ".join(split_messages(text))
 
 
 def _print_outcome(o) -> None:
     typer.echo(f"{_ACTION.get(o.action, o.action)}  {o.name or o.conv_id}")
     r = o.reply
     if r and r.text:
-        typer.echo(f"    回复：{r.text}")
+        typer.echo(f"    回复：{_joined(r.text)}")
     if r and r.reason:
         conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
         typer.echo(f"    理由：{r.reason}{conf}")
-    if o.action in ("blocked", "error", "failed") and o.detail:
+    if o.action in ("blocked", "error", "failed", "partial") and o.detail:
         typer.echo(f"    原因：{o.detail}")
 
 
@@ -495,7 +508,7 @@ def replies(limit: int = typer.Option(20, help="显示最近多少条")) -> None
         when = r.created_at.astimezone().strftime("%m-%d %H:%M")
         typer.echo(f"{when} [{r.source}] {_ACTION.get(r.status, r.status)}  {names.get(r.conv_id)}")
         if r.text:
-            typer.echo(f"    回复：{r.text}")
+            typer.echo(f"    回复：{_joined(r.text)}")
         reasons = json.loads(r.guard_reasons or "[]")
         if reasons:
             typer.echo(f"    护栏：{'；'.join(reasons)}")

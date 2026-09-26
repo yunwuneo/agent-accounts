@@ -139,7 +139,8 @@ class GuardConfig(BaseModel):
     allowlist: list[str] = Field(default_factory=list)  # 非空时只回这些会话（conv_id 或昵称）
     blocklist: list[str] = Field(default_factory=list)  # conv_id 或昵称
     min_confidence: float = 0.6
-    max_len: int = 120
+    max_len: int = 120  # 单条消息
+    max_messages: int = 3  # 一次回复最多分几条发
     min_interval_s: int = 60  # 同一会话两次发送的最小间隔
     max_per_hour: int = 20
     max_per_day: int = 100

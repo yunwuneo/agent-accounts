@@ -2,7 +2,7 @@
 
 检查分三类：
 - 对象：总开关、会话类型、互关、黑白名单、触发消息是否全是系统/不支持的消息
-- 内容：模型把握、长度、链接、联系方式、金钱、承诺、自定义禁用词
+- 内容：模型把握、条数、每条长度、链接、联系方式、金钱、承诺、自定义禁用词
 - 频率：同一会话最小间隔、全局每小时/每天上限
 """
 
@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from agent_accounts.core.config import GuardConfig
+from agent_accounts.core.reply import split_messages
 
 # 内容规则：命中即拦截。宁可误拦，不可误发
 CONTENT_RULES: list[tuple[str, re.Pattern[str]]] = [
@@ -36,7 +37,7 @@ class GuardInput:
     is_mutual: bool
     trigger_types: list[str]  # 触发这次决策的对方消息类型
     should_reply: bool
-    text: str
+    text: str  # 多条消息一行一条
     confidence: float | None
     last_sent_in_conv: datetime | None
     sent_last_hour: int
@@ -59,9 +60,12 @@ def content_problems(text: str, cfg: GuardConfig) -> list[str]:
     words = [w for w in cfg.extra_block_words if w and w in text]
     if words:
         problems.append("包含禁用词")
-    if len(text) > cfg.max_len:
-        problems.append(f"超过 {cfg.max_len} 字")
-    if not text.strip():
+    messages = split_messages(text)
+    if len(messages) > cfg.max_messages:
+        problems.append(f"超过 {cfg.max_messages} 条")
+    if any(len(m) > cfg.max_len for m in messages):
+        problems.append(f"单条超过 {cfg.max_len} 字")
+    if not messages:
         problems.append("内容为空")
     return problems
 

@@ -6,6 +6,8 @@
   聊天区是倒序的虚拟列表，不能按位置找新气泡（2026-09-25 首次真实发送时踩到）
 - 只有文字仍留在输入框里（确定没发出去）时才重试，且只重新点一次发送，不重新键入
 - 页面上已经出现这段文字就当作已发送
+- 多条消息逐条发送，每条之间停顿一下（像真人打完一句再打下一句）；任何一条没确认发出
+  就停下，不再发后面的
 
 点进会话会把对方消息标为已读，这是发送的必要代价。
 """
@@ -161,3 +163,36 @@ async def send_text(s: PageSession, text: str, *, verify_timeout_s: float = 8.0)
     finally:
         page.remove_listener("request", on_request)
         page.remove_listener("response", on_response)
+
+
+@dataclass
+class MultiSendResult:
+    ok: bool
+    sent: int  # 确认发出的条数
+    total: int
+    detail: str
+    results: list[SendResult] = field(default_factory=list)
+
+
+async def send_messages(
+    s: PageSession, texts: list[str], *, verify_timeout_s: float = 8.0
+) -> MultiSendResult:
+    """在当前打开的会话里依次发送多条消息。前一条确认发出后才发下一条。"""
+    results: list[SendResult] = []
+    for i, text in enumerate(texts):
+        if i:
+            await s.pause(1.0, 3.0)  # 打完一句，停一下再打下一句
+        try:
+            r = await send_text(s, text, verify_timeout_s=verify_timeout_s)
+        except SendError as e:
+            r = SendResult(False, str(e))
+        results.append(r)
+        if not r.ok:
+            break
+    sent, total = sum(r.ok for r in results), len(texts)
+    last = results[-1].detail if results else "没有要发送的消息"
+    if total and sent == total:
+        detail = last if total == 1 else f"已发送 {total} 条"
+        return MultiSendResult(True, sent, total, detail, results)
+    detail = last if total <= 1 else f"第 {sent + 1}/{total} 条：{last}"
+    return MultiSendResult(False, sent, total, detail, results)
