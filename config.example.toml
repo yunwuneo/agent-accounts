@@ -7,6 +7,10 @@ headless = false     # 抖音在 headless 下会触发验证码（Spike-4），�
 
 [douyin]
 auto_reply = "dry_run"   # on / off / dry_run
+interval_min_s = 60      # douyin run / sync --watch 两轮之间随机等多少秒（最短）
+interval_max_s = 120     # （最长）
+quiet_hours = []         # 休息时段，本机时间，如 ["03:00-08:00", "11:00-12:00"]；可跨午夜 "23:00-07:00"
+quiet_wake_jitter_s = 300  # 休息结束后再随机晚 0–N 秒醒来，避免每天整点上线
 
 # ① 媒体理解：Anthropic Messages 格式（/v1/messages），模型必须支持图片输入
 [llm.understand]

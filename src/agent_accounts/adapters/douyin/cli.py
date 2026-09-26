@@ -40,6 +40,28 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
         raise typer.Exit(4) from None
 
 
+async def _rest_if_quiet(cfg: config.Config, *, once: bool = False) -> bool:
+    """在休息时段里就不开浏览器：once 时直接跳过本轮，否则睡到时段结束（再加随机延迟）。
+
+    返回 True 表示本轮因休息被跳过。按墙上时间分段睡，电脑睡眠唤醒后也能及时重新判断。
+    """
+    import random
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    until = cfg.douyin.quiet_until(now)
+    if until is None:
+        return False
+    if once:
+        typer.secho(f"[{now:%H:%M:%S}] 😴 休息时段（到 {until:%H:%M}），本轮跳过", fg="blue")
+        return True
+    wake = until + timedelta(seconds=random.uniform(0, cfg.douyin.quiet_wake_jitter_s))
+    typer.secho(f"[{now:%H:%M:%S}] 😴 休息时段，{wake:%H:%M} 左右醒来", fg="blue")
+    while (left := (wake - datetime.now()).total_seconds()) > 0:
+        await asyncio.sleep(min(left, 60))
+    return True
+
+
 @app.command()
 def login(
     timeout: int = typer.Option(300, help="等待扫码的最长秒数"),
@@ -169,7 +191,9 @@ def sync(
     ),
     as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
     watch: bool = typer.Option(
-        False, "--watch", help="一直同步：每轮间隔同 douyin run，不调模型、不发送，Ctrl+C 停止"
+        False,
+        "--watch",
+        help="一直同步：每轮间隔和休息时段同 douyin run，不调模型、不发送，Ctrl+C 停止",
     ),
 ) -> None:
     """打开首页拦截私信接口，新消息入库（不点进会话，不会标记已读）。"""
@@ -222,6 +246,8 @@ def sync(
         # 每轮都重新 start_run：账号被冻结后下一轮就会停下；验证码/风控/登录失效直接退出
         cfg = config.load()
         while True:
+            if await _rest_if_quiet(cfg):
+                continue
             typer.secho(f"[{datetime.now():%H:%M:%S}] 同步", bold=True)
             await main()
             await asyncio.sleep(
@@ -456,7 +482,10 @@ def run(
         False, "--allow-send", help="真正发送的第二道确认（还需 auto_reply = on）"
     ),
 ) -> None:
-    """自动读取 + 回复循环：sync → 新消息 → 决策 → 护栏 → dry_run 或发送。"""
+    """自动读取 + 回复循环：sync → 新消息 → 决策 → 护栏 → dry_run 或发送。
+
+    [douyin] quiet_hours 休息时段里不开浏览器、不回复（--once 时直接跳过）。
+    """
     import asyncio
     import random
     from datetime import datetime
@@ -477,6 +506,10 @@ def run(
 
     async def loop() -> None:
         while True:
+            if await _rest_if_quiet(cfg, once=once):
+                if once:
+                    return
+                continue
             await tick()
             if once:
                 return
