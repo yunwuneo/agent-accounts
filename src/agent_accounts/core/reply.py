@@ -22,25 +22,36 @@ class ReplyError(llm.LLMError):
     pass
 
 
+def split_messages(text: str) -> list[str]:
+    """回复记录里多条消息按行存放（一行一条）；拆回消息列表，去掉空行。"""
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 class ReplyDecision(BaseModel):
     should_reply: bool
-    text: str = Field(default="", description="要发送的一条消息；不回复时为空")
+    # 像真人聊天那样分几条发；不回复时为空
+    messages: list[str] = Field(default_factory=list, description="依次发送的消息，通常 1–3 条")
     reason: str = Field(default="", description="一句话说明为什么这样决定")
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @property
+    def text(self) -> str:
+        """存库和护栏检查用：一行一条。"""
+        return "\n".join(self.messages)
 
 
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "should_reply": {"type": "boolean"},
-        "text": {"type": "string"},
+        "messages": {"type": "array", "items": {"type": "string"}},
         "reason": {"type": "string"},
         "confidence": {"type": "number"},
     },
-    "required": ["should_reply", "text", "reason", "confidence"],
+    "required": ["should_reply", "messages", "reason", "confidence"],
     "additionalProperties": False,
 }
-JSON_HINT = '{"should_reply": true, "text": "...", "reason": "...", "confidence": 0.8}'
+JSON_HINT = '{"should_reply": true, "messages": ["...", "..."], "reason": "...", "confidence": 0.8}'
 
 
 @dataclass
@@ -55,8 +66,11 @@ RULES = """你正在用自己的抖音账号和对方私信聊天。下面会给
 标了【新】的是对方刚发来、需要你决定要不要回复的消息。
 
 要求：
-- 只回复一条消息，把【新】消息作为一个整体来回应，不要逐条回复
-- 符合上面的人设；简短自然，像手机上打字聊天，一般不超过 60 个字，不用 Markdown、不用列表
+- 把【新】消息作为一个整体来回应，不要逐条回复
+- 符合上面的人设；简短自然，像手机上打字聊天，不用 Markdown、不用列表
+- messages 是依次发出的几条消息。像真人一样：一句话能说完就只发 1 条；想说的有几层意思时\
+拆成 2–3 条短消息分开发，每条一个意思、一般不超过 30 个字，不要把好几个分句挤在一条里。\
+不要为了拆而拆，最多 3 条
 - 对方分享了视频或图集时，会附上作品摘要，用它来理解作品，但不要照抄摘要、不要像在做总结
 - 不需要回复时（对方在结束对话、只发了表情或系统提示、内容不需要回应等）should_reply 为 false
 - confidence 是你对「这样回复合适」的把握（0–1）；拿不准时给低分
@@ -102,7 +116,8 @@ async def decide(
         error=ReplyError,
         refusal_message="模型拒绝生成回复",
     )
-    decision.text = decision.text.strip()
-    if not decision.text:
+    # 模型偶尔会在一条里换行：按行拆开，和存库格式一致
+    decision.messages = [m for text in decision.messages for m in split_messages(text)]
+    if not decision.messages:
         decision.should_reply = False
     return decision

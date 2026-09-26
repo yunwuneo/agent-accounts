@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_accounts.adapters.douyin.sender import SendError, send_text
+from agent_accounts.adapters.douyin.sender import SendError, send_messages, send_text
 
 pytestmark = pytest.mark.browser
 
@@ -36,9 +36,10 @@ PAGE = """
 class FakeSession:
     def __init__(self, page):
         self.page = page
+        self.pauses = []
 
     async def pause(self, lo=None, hi=None):
-        return None
+        self.pauses.append((lo, hi))
 
 
 async def _setup(page, ignore: int = 0, prefill: str = ""):
@@ -92,3 +93,18 @@ async def test_same_text_sent_twice_is_detected_by_count(page):
     assert (await send_text(s, "哈哈", verify_timeout_s=2)).ok
     assert (await send_text(s, "哈哈", verify_timeout_s=2)).ok
     assert (await _bubbles(page)).count("哈哈") == 2
+
+
+async def test_send_messages_one_by_one_with_pause(page):
+    s = await _setup(page)
+    result = await send_messages(s, ["哈哈哈", "这个也太真实了"], verify_timeout_s=2)
+    assert result.ok and result.sent == 2 and result.detail == "已发送 2 条"
+    assert (await _bubbles(page))[:2] == ["这个也太真实了", "哈哈哈"]  # 倒序：最新在最前
+    assert (1.0, 3.0) in s.pauses  # 两条之间停顿
+
+
+async def test_send_messages_stops_at_first_failure(page):
+    s = await _setup(page, prefill="残留")  # 输入框非空：第一条就不发
+    result = await send_messages(s, ["一", "二"], verify_timeout_s=0.5)
+    assert not result.ok and result.sent == 0 and result.detail.startswith("第 1/2 条")
+    assert await _bubbles(page) == ["hi"]

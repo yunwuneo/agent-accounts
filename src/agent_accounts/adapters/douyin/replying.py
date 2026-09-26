@@ -9,11 +9,12 @@ from datetime import UTC, datetime, timedelta
 from agent_accounts.adapters.douyin import PLATFORM
 from agent_accounts.adapters.douyin import store as dstore
 from agent_accounts.adapters.douyin.page import login_state, open_home
-from agent_accounts.adapters.douyin.sender import SendError, open_conversation, send_text
+from agent_accounts.adapters.douyin.sender import SendError, open_conversation, send_messages
 from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import guard
 from agent_accounts.core.config import Config
 from agent_accounts.core.errors import HumanRequired
+from agent_accounts.core.reply import split_messages
 from agent_accounts.core.run import RunContext
 
 
@@ -64,28 +65,34 @@ def guard_input(
 async def send_in_session(
     s: BrowserSession, run: RunContext, conv: dstore.DouyinConversation, reply: dstore.DouyinReply
 ) -> dstore.DouyinReply:
-    """在已登录的会话里发送 reply.text，并更新记录。"""
+    """在已登录的会话里依次发送 reply.text 的各条消息（一行一条），并更新记录。
+
+    只发出一部分时状态记为 partial：已经发出去的消息算作一次发送（计入频率上限），不补发。
+    """
     if not conv.name:
         raise SendError("会话没有昵称，无法在列表里定位")
+    messages = split_messages(reply.text or "")
     try:
         await open_conversation(s, conv.name)
-        result = await send_text(s, reply.text or "")
+        result = await send_messages(s, messages)
     except SendError as e:
         reply.status, reply.error = "failed", str(e)
         run.alert("warning", f"发送失败（{conv.name}）：{e}")
         await s.snapshot(run.dir, f"send-failed-{reply.id or 'new'}")
     else:
-        reply.status = "sent" if result.ok else "failed"
+        reply.status = "sent" if result.ok else ("partial" if result.sent else "failed")
         reply.error = None if result.ok else result.detail
-        reply.sent_at = datetime.now(UTC) if result.ok else None
+        reply.sent_at = datetime.now(UTC) if result.sent else None
         run.audit(
             "douyin.send",
             conv_id=conv.conv_id,
-            chars=len(reply.text or ""),
+            chars=[len(m) for m in messages],
             ok=result.ok,
+            sent=result.sent,
+            total=result.total,
             detail=result.detail,
-            retried=result.retried,
-            imapi_requests=sorted(set(result.imapi_requests)),
+            retried=any(r.retried for r in result.results),
+            imapi_requests=sorted({u for r in result.results for u in r.imapi_requests}),
         )
         if not result.ok:
             run.alert("warning", f"发送未确认（{conv.name}）：{result.detail}")

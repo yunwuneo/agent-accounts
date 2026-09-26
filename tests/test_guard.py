@@ -43,7 +43,10 @@ def test_normal_reply_passes():
         ({"is_mutual": False}, "互相关注"),
         ({"trigger_types": ["system", "unsupported"]}, "系统消息"),
         ({"confidence": 0.3}, "把握"),
-        ({"text": "长" * 121}, "超过 120 字"),
+        ({"text": "长" * 121}, "单条超过 120 字"),
+        ({"text": "短\n" + "长" * 121}, "单条超过 120 字"),
+        ({"text": "一\n二\n三\n四"}, "超过 3 条"),
+        ({"text": "好呀\n加我微信吧"}, "联系方式"),  # 每条都查
         ({"text": "看这个 https://example.com"}, "链接"),
         ({"text": "去 abc.com 看看"}, "链接"),
         ({"text": "我手机号13800138000"}, "手机号"),
@@ -84,3 +87,7 @@ def test_manual_send_checks_only_content_and_rate():
 def test_ordinary_chat_is_not_over_blocked():
     for text in ["哈哈笑死", "这个视频好好看", "你也玩炉石吗？", "晚安～", "明天见"]:
         assert reasons(text=text) == [], text
+
+
+def test_multiple_short_messages_pass():
+    assert check(CFG, replace(BASE, text="哈哈哈\n" + "长" * 100 + "\n好")).ok

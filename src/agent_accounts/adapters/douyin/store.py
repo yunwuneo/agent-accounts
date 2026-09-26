@@ -227,11 +227,12 @@ class DouyinReply(SQLModel, table=True):
     trigger_last_index: int | None = None
     source: str = "auto"  # auto（run）/ manual（douyin reply）
     should_reply: bool = False
-    text: str | None = None
+    text: str | None = None  # 多条消息一行一条
     reason: str = ""
     confidence: float | None = None
     guard_reasons: str = "[]"  # 护栏拦截原因
-    # dry_run：只生成不发送；blocked：被护栏拦下；skipped：模型决定不回；sent；failed
+    # dry_run：只生成不发送；blocked：被护栏拦下；skipped：模型决定不回；sent；failed；
+    # partial：多条消息只发出了一部分
     status: str
     model: str | None = None
     error: str | None = None
@@ -251,7 +252,9 @@ def save_reply(reply: DouyinReply) -> DouyinReply:
 def sent_replies_since(since: datetime, conv_id: str | None = None) -> list[DouyinReply]:
     with store.session() as s:
         q = select(DouyinReply).where(
-            DouyinReply.status == "sent", col(DouyinReply.sent_at) >= since
+            # partial：多条消息只发出了一部分，也算一次发送
+            col(DouyinReply.status).in_(["sent", "partial"]),
+            col(DouyinReply.sent_at) >= since,
         )
         if conv_id:
             q = q.where(DouyinReply.conv_id == conv_id)
