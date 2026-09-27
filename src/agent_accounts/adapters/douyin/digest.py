@@ -27,11 +27,11 @@ from agent_accounts.adapters.douyin import media as dmedia
 from agent_accounts.adapters.douyin import store as dstore
 from agent_accounts.adapters.douyin.page import login_state, open_home
 from agent_accounts.browser.session import BrowserSession
-from agent_accounts.core import digests, media, store
-from agent_accounts.core.config import Config, ConfigError
+from agent_accounts.core import digests, media, store, watch
+from agent_accounts.core.config import Config
 from agent_accounts.core.errors import HumanRequired
 from agent_accounts.core.run import RunContext
-from agent_accounts.core.transcribe import TranscribeError, transcribe
+from agent_accounts.core.transcribe import transcribe
 from agent_accounts.core.understand import UnderstandError, UnderstandInput, understand
 
 _URL = re.compile(r"douyin\.com/(video|note)/(\d+)")
@@ -94,83 +94,23 @@ MAX_VIDEO_TRIES = 3  # 下载不完整时最多试几个候选地址
 VIDEO_DOWNLOAD_TIMEOUT_S = 600  # 长视频文件大，给足下载时间
 
 
-def _short_by(got: float, expected: float | None) -> bool:
-    """下载到的时长明显短于作品时长（允许 2 秒或 3% 的误差）。"""
-    return bool(expected) and got < expected - max(2.0, expected * 0.03)  # type: ignore[operator]
-
-
 async def _download_full_video(
     s: BrowserSession, m: dmedia.DouyinMedia, tmp: Path, notes: list[str]
 ) -> Path | None:
     """依次尝试候选地址，直到拿到完整的视频；都不完整时用最长的那个，并在 notes 里说明。"""
     urls = (m.video_urls or ([m.video_url] if m.video_url else []))[:MAX_VIDEO_TRIES]
-    best: tuple[float, Path] | None = None
-    last_error = ""
-    for i, url in enumerate(urls):
-        dest = tmp / f"video_{i}.mp4"
-        try:
-            await dmedia.download(s, url, dest, timeout_s=VIDEO_DOWNLOAD_TIMEOUT_S)
-            got = (await media.probe(dest)).duration_s or 0.0
-        except HumanRequired:
-            raise
-        except Exception as e:  # 这个地址下载或解析失败，换下一个
-            last_error = type(e).__name__
-            dest.unlink(missing_ok=True)
-            continue
-        if best is None or got > best[0]:
-            if best:
-                best[1].unlink(missing_ok=True)
-            best = (got, dest)
-        else:
-            dest.unlink(missing_ok=True)
-        if not _short_by(got, m.duration_s):
-            break
-    if best is None:
-        if urls:
-            raise RuntimeError(f"视频下载失败（{last_error}）")
-        return None
-    if _short_by(best[0], m.duration_s):
-        notes.append(
-            f"下载到的视频只有 {media.clock(best[0])}，作品时长 {media.clock(m.duration_s or 0)}，"
-            "后面的内容没有看到"
-        )
-    return best[1]
+
+    async def fetch(url: str, dest: Path) -> Path:
+        return await dmedia.download(s, url, dest, timeout_s=VIDEO_DOWNLOAD_TIMEOUT_S)
+
+    return await watch.download_full_video(fetch, urls, m.duration_s, tmp, notes)
 
 
 async def _transcribe_full(
     cfg: Config, video: Path, duration_s: float | None, tmp: Path, notes: list[str]
 ) -> str | None:
     """整段音轨分段转写，按段落拼接并标出时间范围。"""
-    limit = cfg.media.max_video_seconds
-    audio = await media.extract_audio(video, tmp / "audio.mp3", max_seconds=limit)
-    if audio is None:
-        notes.append("视频没有音轨")
-        return None
-    if duration_s and duration_s > limit:
-        notes.append(f"语音只转写了前 {media.clock(limit)}，之后的没有听到")
-    seg_s = cfg.media.transcribe_segment_s
-    segments = await media.split_audio(audio, tmp, segment_s=seg_s)
-    parts: list[str] = []
-    for i, seg in enumerate(segments):
-        try:
-            text = await transcribe(cfg.transcribe, seg)
-        except ConfigError as e:
-            notes.append(f"语音转写失败：{e}")
-            return None
-        except TranscribeError as e:
-            if len(segments) == 1:
-                notes.append(f"语音转写失败：{e}")
-                return None
-            span = f"{media.clock(i * seg_s)}–{media.clock((i + 1) * seg_s)}"
-            notes.append(f"{span} 这段语音转写失败：{e}")
-            continue
-        if text:
-            if len(segments) == 1:
-                parts.append(text)
-            else:
-                end = min((i + 1) * seg_s, duration_s or (i + 1) * seg_s)
-                parts.append(f"[{media.clock(i * seg_s)}–{media.clock(end)}] {text}")
-    return "\n".join(parts) or None
+    return await watch.transcribe_full(cfg, video, duration_s, tmp, notes, transcribe=transcribe)
 
 
 async def _build_input(

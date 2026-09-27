@@ -22,9 +22,9 @@ def main() -> None:
     """小红书适配器命令组。"""
 
 
-def _run(coro) -> None:
+def _run(coro):
     try:
-        asyncio.run(coro)
+        return asyncio.run(coro)
     except AccountFrozen as exc:
         typer.secho(str(exc), fg="blue", err=True)
         raise typer.Exit(3) from None
@@ -195,6 +195,106 @@ def thread(
         typer.echo(f"{_local(m.sent_at)} {who}：{m.preview()}{extra}")
 
 
+_NOTE_URL = re.compile(r"xiaohongshu\.com/(?:explore|discovery/item)/([0-9a-f]{24})")
+
+
+@app.command()
+def digest(
+    targets: list[str] = typer.Argument(None, help="笔记 ID 或笔记链接（须在私信里被分享过）"),  # noqa: B008
+    pending: bool = typer.Option(False, help="处理私信里对方分享过、还没有摘要的笔记"),
+    limit: int = typer.Option(5, help="--pending 时最多处理几个"),
+    list_only: bool = typer.Option(False, "--list", help="只列出待处理的笔记，不分析"),
+    force: bool = typer.Option(False, help="忽略缓存重新分析"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """理解私信里分享的笔记（图文 / 视频），生成摘要（按笔记缓存）。"""
+    from agent_accounts.adapters.xiaohongshu import digest as xdigest
+
+    ids: list[str] = []
+    for t in targets or []:
+        m = _NOTE_URL.search(t)
+        note_id = m.group(1) if m else t
+        if not re.fullmatch(r"[0-9a-f]{24}", note_id):
+            typer.secho(f"无法识别的笔记：{t}", fg="red", err=True)
+            raise typer.Exit(1)
+        ids.append(note_id)
+    if list_only:
+        todo = xdigest.pending_items()
+        typer.echo(f"待处理 {len(todo)} 篇笔记")
+        for note_id in todo:
+            msg = xdigest.share_message(note_id)
+            kind = "视频" if msg and msg.note_type == "video" else "图文"
+            typer.echo(f"  [{kind}] {note_id}  {(msg.note_title if msg else '') or ''}")
+        return
+    if pending:
+        ids += [i for i in xdigest.pending_items(limit) if i not in ids]
+    if not ids:
+        typer.echo("没有需要处理的笔记")
+        return
+
+    async def main() -> list:
+        with start_run(PLATFORM, "digest") as run:
+            return await xdigest.digest_items(config.load(), run, ids, force=force)
+
+    outcomes = _run(main())
+    if as_json:
+        typer.echo(
+            json.dumps(
+                [
+                    {"note_id": o.note_id, "cached": o.cached, "error": o.error}
+                    | ({"digest": _digest_json(o.digest)} if o.digest else {})
+                    for o in outcomes
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    for o in outcomes:
+        if o.error:
+            typer.secho(f"❌ {o.note_id}：{o.error}", fg="red")
+            continue
+        d = o.digest
+        tag = "（缓存）" if o.cached else ""
+        kind = "视频笔记" if d.kind == "video" else "图文笔记"
+        typer.secho(f"\n[{kind}] {d.item_id}{tag}  {d.author}", bold=True)
+        if d.title:
+            typer.echo(f"标题：{' '.join(d.title.split())[:80]}")
+        if d.body:
+            typer.echo(f"正文：{' '.join(d.body.split())[:120]}")
+        typer.echo(f"摘要：{d.summary}")
+        typer.echo(f"氛围：{d.vibe}")
+        for h in d.reply_hooks:
+            typer.echo(f"  · {h}")
+        extra = [f"{d.frames_used} 张图", f"转写 {len(d.transcript or '')} 字", d.model]
+        typer.echo("（" + "，".join(extra) + "）")
+        for n in d.notes:
+            typer.secho(f"  ⚠️ {n}", fg="yellow")
+    if any(o.error for o in outcomes):
+        raise typer.Exit(1)
+
+
+def _digest_json(d) -> dict:
+    return {
+        "note_id": d.item_id,
+        "kind": d.kind,
+        "available": d.available,
+        "unavailable_reason": d.filter_reason,
+        "title": d.title,
+        "body": d.body,
+        "author": d.author,
+        "tags": d.hashtags,
+        "duration_s": d.duration_s,
+        "transcript": d.transcript,
+        "summary": d.summary,
+        "vibe": d.vibe,
+        "reply_hooks": d.reply_hooks,
+        "frames_used": d.frames_used,
+        "model": d.model,
+        "notes": d.notes,
+    }
+
+
 spike_app = typer.Typer(help="M0 Spike：只记录数据结构，不保存取值", no_args_is_help=True)
 app.add_typer(spike_app, name="spike")
 
@@ -284,6 +384,22 @@ def spike_open(wait: int = typer.Option(10, min=3, max=60, help="进入会话后
     _run(main())
 
 
+def _url_facts(url: str, tokens: dict[str, str]) -> dict[str, object]:
+    """笔记页地址里只取参数名、xsec_source 取值，以及 token 是否就是私信卡片里的那个。"""
+    from urllib.parse import parse_qs, urlsplit
+
+    parts = urlsplit(url)
+    query = parse_qs(parts.query)
+    note_id = parts.path.rstrip("/").rsplit("/", 1)[-1]
+    token = (query.get("xsec_token") or [None])[0]
+    return {
+        "query_keys": sorted(query),
+        "xsec_source": (query.get("xsec_source") or [None])[0],
+        "token_from_message": token is not None and tokens.get(note_id) == token,
+        "link_scheme": tokens.get(f"scheme:{note_id}"),
+    }
+
+
 @spike_app.command("note")
 def spike_note(max_notes: int = typer.Option(2, min=1, max=2)) -> None:
     """在唯一的测试会话里依次点开笔记卡片，记录笔记数据结构与媒体能否下载（不保存媒体）。"""
@@ -315,9 +431,23 @@ def spike_note(max_notes: int = typer.Option(2, min=1, max=2)) -> None:
         with start_run(PLATFORM, "spike.note") as run:
             recorder = ShapeRecorder()
             results: list[dict[str, object]] = []
+            tokens: dict[str, str] = {}  # 笔记 id → 私信卡片里的 xsec_token / link 协议，只在内存
+
+            async def on_history(response) -> None:
+                if not response.url.split("?", 1)[0].endswith("/messages/history"):
+                    return
+                from agent_accounts.adapters.xiaohongshu import im
+
+                for m in im.parse_history(await response.json()):
+                    if m.note_id and m.note_xsec_token:
+                        tokens[m.note_id] = m.note_xsec_token
+                        inner = json.loads(json.loads(m.content_json)["content"])
+                        tokens[f"scheme:{m.note_id}"] = str(inner.get("link", "")).split(":", 1)[0]
+
             async with BrowserSession(PLATFORM, config.load().browser, headless=False) as s:
                 recorder.attach(s.page)
                 s.context.on("page", recorder.attach)
+                s.page.on("response", lambda r: asyncio.ensure_future(on_history(r)))
                 await s.page.goto(CHAT_URL, wait_until="domcontentloaded")
                 await s.page.wait_for_timeout(5000)
                 await check(s.page)
@@ -351,6 +481,7 @@ def spike_note(max_notes: int = typer.Option(2, min=1, max=2)) -> None:
                         "video_icon": is_video,
                         "new_tab": page is not s.page,
                         "url_path": re.sub(r"[0-9a-f]{24}", ":id", page.url.split("?", 1)[0]),
+                        **_url_facts(page.url, tokens),
                     }
                     blocked = await detect_block(page)
                     row["blocked"] = blocked
@@ -386,7 +517,20 @@ def spike_note(max_notes: int = typer.Option(2, min=1, max=2)) -> None:
                 json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             brief = [
-                {k: r.get(k) for k in ("card", "video_icon", "new_tab", "url_path", "blocked")}
+                {
+                    k: r.get(k)
+                    for k in (
+                        "card",
+                        "video_icon",
+                        "new_tab",
+                        "url_path",
+                        "blocked",
+                        "query_keys",
+                        "xsec_source",
+                        "token_from_message",
+                        "link_scheme",
+                    )
+                }
                 | {
                     "media_fields": len(r.get("media_fields") or []),
                     "downloads": r.get("downloads"),

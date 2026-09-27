@@ -23,6 +23,7 @@ class MediaDigest(SQLModel, table=True):
     available: bool = True  # 作品不可见时只基于分享卡片分析
     filter_reason: str | None = None
     title: str = ""
+    body: str = ""  # 正文（小红书笔记；抖音作品的描述在 title 里）
     author: str = ""
     hashtags_json: str = "[]"
     duration_s: float | None = None
