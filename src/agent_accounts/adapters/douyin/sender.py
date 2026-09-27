@@ -8,6 +8,8 @@
 - 页面上已经出现这段文字就当作已发送
 - 多条消息逐条发送，每条之间停顿一下（像真人打完一句再打下一句）；任何一条没确认发出
   就停下，不再发后面的
+- 会话行可能被页面上别的元素盖住一部分（2026-09-27 Windows 上首页的 discover-tab 栏盖住了
+  私信面板第一行，点正中心一直超时），所以点行里没被盖住的位置；整行都被盖住就报错、不硬点
 
 点进会话会把对方消息标为已读，这是发送的必要代价。
 """
@@ -20,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page, Request, Response
 
 from agent_accounts.adapters.douyin import selectors as sel
@@ -66,6 +69,13 @@ async def _bubble_texts(page: Page) -> list[str]:
 
 async def open_conversation(s: PageSession, name: str) -> None:
     """打开私信面板，点进昵称完全匹配的会话。"""
+    try:
+        await _open_conversation(s, name)
+    except PlaywrightError as e:  # 还没键入任何内容，按发送失败处理，不让整轮崩掉
+        raise SendError(f"打不开会话：{str(e).splitlines()[0]}") from None
+
+
+async def _open_conversation(s: PageSession, name: str) -> None:
     entry = await locate(s.page, sel.MESSAGES_ENTRY)
     if entry is None:
         raise SendError("找不到消息入口，先跑 douyin doctor")
@@ -80,11 +90,39 @@ async def open_conversation(s: PageSession, name: str) -> None:
         title = row.locator('[class*="ConversationItemtitle"]')
         text = await (title.first if await title.count() else row).inner_text()
         if normalize(text).startswith(normalize(name)):
-            await row.click()
+            await _click_uncovered(row)
             await s.pause(2.0, 3.0)
             await ensure_not_blocked(s.page)
             return
     raise SendError(f"会话列表里找不到「{name}」")
+
+
+# 在元素范围内找一个真正能点到它的点（elementFromPoint 落在元素内），
+# 返回相对元素左上角的坐标；整块都被盖住时返回盖住中心点的元素描述。
+_FIND_CLICK_POINT = """el => {
+    const r = el.getBoundingClientRect();
+    const xs = [0.5, 0.3, 0.7, 0.15, 0.85], ys = [0.5, 0.75, 0.25, 0.9, 0.1];
+    for (const fy of ys) for (const fx of xs) {
+        const x = r.left + r.width * fx, y = r.top + r.height * fy;
+        const hit = document.elementFromPoint(x, y);
+        if (hit && (hit === el || el.contains(hit)))
+            return {x: x - r.left, y: y - r.top};
+    }
+    const c = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const desc = c ? [c.tagName.toLowerCase(), c.getAttribute('data-e2e'),
+        (typeof c.className === 'string' ? c.className : '').slice(0, 80)]
+        .filter(Boolean).join(' ') : '不在视口内';
+    return {covered_by: desc};
+}"""
+
+
+async def _click_uncovered(row: Locator) -> None:
+    """点击会话行没被遮挡的位置。只做真实鼠标点击，不用 JS 派发事件绕过遮挡。"""
+    await row.scroll_into_view_if_needed(timeout=10_000)
+    point = await row.evaluate(_FIND_CLICK_POINT)
+    if "covered_by" in point:
+        raise SendError(f"会话行被页面上的其他元素整个盖住（{point['covered_by']}），未点击")
+    await row.click(position=point, timeout=10_000)
 
 
 async def _occurrences(page: Page, text: str) -> int:
