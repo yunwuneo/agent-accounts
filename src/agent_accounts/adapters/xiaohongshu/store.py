@@ -41,6 +41,14 @@ class XhsConversation(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
     @property
+    def followed(self) -> bool:
+        """已关注的会话才处理（用户决定：陌生人的消息和关注请求一概不管）。
+
+        实测互相关注时 follow_status 为 BOTH、is_friend 为真；单向关注的取值还没见过，先不算。
+        """
+        return (self.follow_status or "").upper() == "BOTH" or self.is_friend is True
+
+    @property
     def has_new(self) -> bool:
         return self.max_store_id is not None and self.max_store_id > (self.synced_store_id or 0)
 
@@ -214,4 +222,69 @@ def list_messages(peer_id: str, *, limit: int = 30) -> list[XhsMessage]:
     with store.session() as s:
         q = select(XhsMessage).where(XhsMessage.peer_id == peer_id)
         rows = s.exec(q.order_by(col(XhsMessage.store_id).desc()).limit(limit)).all()
+    return list(reversed(rows))
+
+
+def mark_opened(peer_id: str) -> None:
+    """点开会话后平台会清零未读，本地同步清零。"""
+    with store.session() as s:
+        if row := s.get(XhsConversation, peer_id):
+            row.unread = 0
+            s.add(row)
+            s.commit()
+
+
+def set_handled(peer_id: str, store_id: int) -> None:
+    with store.session() as s:
+        if row := s.get(XhsConversation, peer_id):
+            row.handled_store_id = max(row.handled_store_id or 0, store_id)
+            s.add(row)
+            s.commit()
+
+
+class XhsReply(SQLModel, table=True):
+    """每一次回复决策（不管最后有没有发出去）都记一条，作为审计和观察 dry_run 的依据。"""
+
+    __tablename__ = "xiaohongshu_replies"
+
+    id: int | None = Field(default=None, primary_key=True)
+    peer_id: str = Field(index=True)
+    trigger_msg_ids: str = "[]"
+    trigger_last_store_id: int | None = None
+    source: str = "auto"  # auto（run）/ manual（xiaohongshu reply）/ decide
+    should_reply: bool = False
+    text: str | None = None  # 多条消息一行一条
+    reason: str = ""
+    confidence: float | None = None
+    guard_reasons: str = "[]"
+    # dry_run / blocked / skipped / sent / failed / partial / deferred（笔记还没分析，下一轮再说）
+    status: str
+    model: str | None = None
+    error: str | None = None
+    run_id: str | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    sent_at: datetime | None = None
+
+
+def save_reply(reply: XhsReply) -> XhsReply:
+    with store.session() as s:
+        s.add(reply)
+        s.commit()
+        s.refresh(reply)
+        return reply
+
+
+def sent_replies_since(since: datetime, peer_id: str | None = None) -> list[XhsReply]:
+    with store.session() as s:
+        q = select(XhsReply).where(
+            col(XhsReply.status).in_(["sent", "partial"]), col(XhsReply.sent_at) >= since
+        )
+        if peer_id:
+            q = q.where(XhsReply.peer_id == peer_id)
+        return list(s.exec(q).all())
+
+
+def recent_replies(limit: int = 20) -> list[XhsReply]:
+    with store.session() as s:
+        rows = s.exec(select(XhsReply).order_by(col(XhsReply.id).desc()).limit(limit)).all()
     return list(reversed(rows))

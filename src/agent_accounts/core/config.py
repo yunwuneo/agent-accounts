@@ -45,16 +45,17 @@ class BrowserConfig(BaseModel):
     pause_max: float = 1.8
 
 
-class DouyinConfig(BaseModel):
+class AutoReplyConfig(BaseModel):
+    """各平台自动回复循环共用的配置。"""
+
     # 写错键名（如 auto-reply）时报错，而不是静默回落到默认的 dry_run
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = "https://www.douyin.com/"
     # 默认保守：新能力先以 dry_run 上线
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
     context_messages: int = 20  # 回复决策时带上的最近消息条数
     digest_per_tick: int = 3  # 每轮最多自动分析几个新分享的作品（控制成本）
-    interval_min_s: int = 60  # douyin run 两轮之间的随机间隔
+    interval_min_s: int = 60  # run 两轮之间的随机间隔
     interval_max_s: int = 120
     # 休息时段（本机时间，如 ["03:00-08:00", "11:00-12:00"]）：run 和 sync --watch 在这些时间里
     # 不开浏览器、不同步、不回复；结束后再随机晚 0–quiet_wake_jitter_s 秒醒来，积压的新消息合并处理
@@ -69,6 +70,15 @@ class DouyinConfig(BaseModel):
 
     def quiet_until(self, now: datetime) -> datetime | None:
         return schedule.quiet_until(now, schedule.parse_windows(self.quiet_hours))
+
+
+class DouyinConfig(AutoReplyConfig):
+    base_url: str = "https://www.douyin.com/"
+
+
+class XiaohongshuConfig(AutoReplyConfig):
+    # 小红书读完整消息要点进会话；每轮最多点开几个有新消息的会话
+    max_open: int = Field(default=5, ge=1, le=20)
 
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
@@ -272,6 +282,7 @@ class McpConfig(BaseModel):
 class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     douyin: DouyinConfig = Field(default_factory=DouyinConfig)
+    xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)

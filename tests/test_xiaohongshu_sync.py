@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agent_accounts.adapters.xiaohongshu import im
 from agent_accounts.adapters.xiaohongshu import store as xstore
-from agent_accounts.adapters.xiaohongshu.sync import Collector, _click_conversation
+from agent_accounts.adapters.xiaohongshu.sync import Collector, click_conversation
 
 FIXTURES = Path(__file__).parent / "fixtures" / "xiaohongshu"
 ME = "a" * 24
@@ -42,8 +42,24 @@ def test_parse_history_message_types():
     assert (image.image_width, image.image_height) == (1080, 1440)
     assert text.type == "text" and text.text == "你好呀" and text.peer_of(ME) == PEER
     assert revoked.revoked and revoked.peer_of(ME) == PEER and revoked.preview() == "[已撤回]"
-    assert system.type == "other" and system.preview() == "你们已互相关注"
+    assert system.type == "system" and system.preview() == "[系统提示] 你们已互相关注"
     assert video.preview() == "[视频笔记] 一条视频笔记"
+
+
+def test_platform_greeting_is_system_message():
+    item = {
+        "id": "x",
+        "store_id": 1,
+        "sender_id": PEER,
+        "receiver_id": ME,
+        "content": json.dumps(
+            {"content": "我们已相互关注，开始聊天吧[偷笑R]", "content_type": 1}, ensure_ascii=False
+        ),
+    }
+    m = im.parse_message(item)
+    assert m.type == "system" and m.preview().startswith("[系统提示] 我们已相互关注")
+    item["content"] = json.dumps({"content": "我们已相互关注这件事挺好", "content_type": 1})
+    assert im.parse_message(item).type == "text"
 
 
 def test_parse_ignores_malformed_items():
@@ -137,11 +153,11 @@ _LIST_HTML = """
 """
 
 
-async def test_click_conversation_by_id_then_unique_name(page):
+async def testclick_conversation_by_id_then_unique_name(page):
     await page.set_content(_LIST_HTML.replace("{peer}", PEER))
-    assert await _click_conversation(page, PEER, "whatever")
+    assert await click_conversation(page, PEER, "whatever")
     assert await page.evaluate("window.clicked") == PEER
-    assert await _click_conversation(page, "e" * 24, "只能按昵称")
+    assert await click_conversation(page, "e" * 24, "只能按昵称")
     assert await page.evaluate("window.clicked") == "opaque-1"
-    assert not await _click_conversation(page, "f" * 24, "重名")  # 昵称不唯一不点
-    assert not await _click_conversation(page, "f" * 24, None)
+    assert not await click_conversation(page, "f" * 24, "重名")  # 昵称不唯一不点
+    assert not await click_conversation(page, "f" * 24, None)

@@ -12,6 +12,16 @@ interval_max_s = 120     # （最长）
 quiet_hours = []         # 休息时段，本机时间，如 ["03:00-08:00", "11:00-12:00"]；可跨午夜 "23:00-07:00"
 quiet_wake_jitter_s = 300  # 休息结束后再随机晚 0–N 秒醒来，避免每天整点上线
 
+# 小红书：只处理已关注的会话；真正发送同样要 auto_reply = "on" 加 xiaohongshu run --allow-send
+[xiaohongshu]
+auto_reply = "dry_run"   # on / off / dry_run
+max_open = 5             # 每轮最多点开几个有新消息的会话（点开会被平台标已读）
+digest_per_tick = 3      # 每轮最多分析几篇新分享的笔记；没分析完的会话留到下一轮再回
+interval_min_s = 60
+interval_max_s = 120
+quiet_hours = []
+quiet_wake_jitter_s = 300
+
 # ① 媒体理解：Anthropic Messages 格式（/v1/messages），模型必须支持图片输入
 [llm.understand]
 base_url = "https://api.anthropic.com"   # 自定义 endpoint；兼容 Anthropic Messages 的代理也可以

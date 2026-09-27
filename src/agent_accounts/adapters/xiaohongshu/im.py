@@ -12,12 +12,17 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlsplit
 
-MessageType = Literal["text", "image", "note", "other"]
+MessageType = Literal["text", "image", "note", "system", "other"]
+
+# 平台以对方名义、按普通文本（content_type 1）自动发的开场语，不是对方亲手发的
+_SYSTEM_TEXT = re.compile(r"^我们已(相互|互相)关注[，,]\s*开始聊天吧")
+_SYSTEM_CONTENT_TYPE = 0
 
 
 def _dt(value: object) -> datetime | None:
@@ -86,6 +91,8 @@ class XhsMessage:
             body = "[已撤回]"
         elif self.type == "text":
             body = self.text or ""
+        elif self.type == "system":
+            body = f"[系统提示] {self.text or self.preview_text or ''}".strip()
         elif self.type == "image":
             body = "[图片]"
         elif self.type == "note":
@@ -178,7 +185,10 @@ def parse_message(item: dict[str, Any]) -> XhsMessage | None:
             "cover_url": inner.get("cover") or inner.get("image"),
         }
     elif isinstance(inner_raw, str) and inner_raw and inner is None:
-        fields = {"type": "text", "text": inner_raw}
+        kind = "system" if _SYSTEM_TEXT.match(inner_raw) else "text"
+        fields = {"type": kind, "text": inner_raw}
+    elif content_type == _SYSTEM_CONTENT_TYPE:
+        fields = {"type": "system"}
     else:
         fields = {"type": "other"}
 

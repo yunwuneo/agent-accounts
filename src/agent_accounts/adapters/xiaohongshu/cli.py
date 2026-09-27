@@ -108,10 +108,12 @@ def sync(
     open_chats: bool = typer.Option(
         True, "--open/--no-open", help="点进有新消息的会话拉取消息（会被平台标为已读）"
     ),
-    max_open: int = typer.Option(5, min=1, max=20, help="每轮最多点开几个会话"),
+    max_open: int | None = typer.Option(
+        None, min=1, max=20, help="每轮最多点开几个会话（默认 [xiaohongshu] max_open）"
+    ),
     as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """打开私信首页同步会话列表；只点开有新消息的会话拉取消息入库。
+    """打开私信首页同步会话列表；只点开已关注、有新消息的会话拉取消息入库。
 
     注意：小红书必须点进会话才能读到完整消息，点进去对方就会看到「已读」。
     --no-open 只更新会话列表和未读数，不标已读。
@@ -120,7 +122,10 @@ def sync(
 
     async def main() -> None:
         with start_run(PLATFORM, "sync") as run:
-            r = await do_sync(config.load(), run, open_chats=open_chats, max_open=max_open)
+            cfg = config.load()
+            r = await do_sync(
+                cfg, run, open_chats=open_chats, max_open=max_open or cfg.xiaohongshu.max_open
+            )
         if as_json:
             typer.echo(
                 json.dumps(
@@ -293,6 +298,183 @@ def _digest_json(d) -> dict:
         "model": d.model,
         "notes": d.notes,
     }
+
+
+_ACTION = {
+    "baseline": "📍 记录基线（不回复旧消息）",
+    "blocked": "🛡️ 护栏拦截",
+    "skipped": "💤 模型决定不回",
+    "dry_run": "📝 dry_run（未发送）",
+    "sent": "✅ 已发送",
+    "failed": "❌ 发送失败",
+    "partial": "⚠️ 只发出一部分",
+    "deferred": "⏳ 笔记还没分析完，下一轮再决定",
+    "error": "⚠️ 出错",
+    "no_new": "（没有可处理的消息）",
+}
+
+
+def _joined(text: str) -> str:
+    from agent_accounts.core.reply import split_messages
+
+    return " ⏎ ".join(split_messages(text))
+
+
+def _print_outcome(o) -> None:
+    typer.echo(f"{_ACTION.get(o.action, o.action)}  {o.name or o.peer_id}")
+    r = o.reply
+    if r and r.text:
+        typer.echo(f"    回复：{_joined(r.text)}")
+    if r and r.reason:
+        conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
+        typer.echo(f"    理由：{r.reason}{conf}")
+    if o.action in ("blocked", "error", "failed", "partial", "deferred") and o.detail:
+        typer.echo(f"    原因：{o.detail}")
+
+
+async def _rest_if_quiet(cfg: config.Config, *, once: bool = False) -> bool:
+    """休息时段里不开浏览器：once 时直接跳过本轮，否则睡到时段结束（再加随机延迟）。"""
+    import random
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    until = cfg.xiaohongshu.quiet_until(now)
+    if until is None:
+        return False
+    if once:
+        typer.secho(f"[{now:%H:%M:%S}] 😴 休息时段（到 {until:%H:%M}），本轮跳过", fg="blue")
+        return True
+    wake = until + timedelta(seconds=random.uniform(0, cfg.xiaohongshu.quiet_wake_jitter_s))
+    typer.secho(f"[{now:%H:%M:%S}] 😴 休息时段，{wake:%H:%M} 左右醒来", fg="blue")
+    while (left := (wake - datetime.now()).total_seconds()) > 0:
+        await asyncio.sleep(min(left, 60))
+    return True
+
+
+@app.command()
+def run(
+    once: bool = typer.Option(False, "--once", help="只跑一轮"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run/--no-dry-run", help="强制只生成不发送（即使已 --allow-send）"
+    ),
+    allow_send: bool = typer.Option(
+        False, "--allow-send", help="真正发送的第二道确认（还需 [xiaohongshu] auto_reply = on）"
+    ),
+) -> None:
+    """自动读取 + 回复循环：sync → 新消息 → 分析笔记 → 决策 → 护栏 → dry_run 或发送。
+
+    只处理已关注的会话；[xiaohongshu] quiet_hours 休息时段里不开浏览器（--once 时直接跳过）。
+    """
+    import random
+    from datetime import datetime
+
+    from agent_accounts.adapters.xiaohongshu.autoreply import run_once
+
+    cfg = config.load()
+
+    async def tick() -> None:
+        with start_run(PLATFORM, "run") as run_ctx:
+            result = await run_once(cfg, run_ctx, dry_run=dry_run, allow_send=allow_send)
+        stamp = datetime.now().strftime("%H:%M:%S")
+        typer.secho(
+            f"[{stamp}] 模式：{result.mode}，点开会话 {result.opened} 个，"
+            f"分析笔记 {result.digested} 篇",
+            bold=True,
+        )
+        for o in result.outcomes:
+            _print_outcome(o)
+        if not result.outcomes:
+            typer.echo("    没有新消息")
+
+    async def loop() -> None:
+        while True:
+            if await _rest_if_quiet(cfg, once=once):
+                if once:
+                    return
+                continue
+            await tick()
+            if once:
+                return
+            x = cfg.xiaohongshu
+            await asyncio.sleep(random.uniform(x.interval_min_s, x.interval_max_s))
+
+    _run(loop())
+
+
+@app.command()
+def decide(
+    peer: str = typer.Argument(..., help="对方用户 ID 或昵称"),
+    last: int = typer.Option(2, help="把对方最近几条消息当作新消息"),
+) -> None:
+    """试运行一次回复决策（只记录，不发送，不打开浏览器）。"""
+    from agent_accounts.adapters.xiaohongshu import store as xstore
+    from agent_accounts.adapters.xiaohongshu.autoreply import decide_for
+
+    row = xstore.find_conversation(peer)
+    if row is None:
+        typer.secho(f"找不到会话：{peer}", fg="red", err=True)
+        raise typer.Exit(1)
+
+    async def main():
+        with start_run(PLATFORM, "decide") as run_ctx:
+            return await decide_for(config.load(), run_ctx, row, last)
+
+    _print_outcome(_run(main()))
+
+
+@app.command()
+def replies(limit: int = typer.Option(20, help="显示最近多少条")) -> None:
+    """查看最近的回复决策记录（观察 dry_run 用）。"""
+    from agent_accounts.adapters.xiaohongshu import store as xstore
+
+    names = {c.peer_id: c.name for c in xstore.list_conversations()}
+    for r in xstore.recent_replies(limit):
+        when = r.created_at.astimezone().strftime("%m-%d %H:%M")
+        typer.echo(f"{when} [{r.source}] {_ACTION.get(r.status, r.status)}  {names.get(r.peer_id)}")
+        if r.text:
+            typer.echo(f"    回复：{_joined(r.text)}")
+        reasons = json.loads(r.guard_reasons or "[]")
+        if reasons:
+            typer.echo(f"    护栏：{'；'.join(reasons)}")
+
+
+@app.command()
+def reply(
+    peer: str = typer.Argument(..., help="对方用户 ID 或昵称"),
+    texts: list[str] = typer.Option(  # noqa: B008
+        ..., "--text", help="要发送的内容；写多次 --text 就分成多条依次发送"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="不再确认，直接发送"),
+) -> None:
+    """手动发送私信（内容和频率仍受护栏限制）。"""
+    from agent_accounts.adapters.xiaohongshu import store as xstore
+    from agent_accounts.adapters.xiaohongshu.autoreply import manual_reply
+
+    row = xstore.find_conversation(peer)
+    if row is None:
+        typer.secho(f"找不到会话：{peer}（先运行 xiaohongshu sync）", fg="red", err=True)
+        raise typer.Exit(1)
+    text = "\n".join(texts)
+    typer.echo(f"发送给「{row.name or row.peer_id}」：{' ⏎ '.join(texts)}")
+    if not yes and not typer.confirm("确认发送？"):
+        raise typer.Exit(1)
+
+    async def main():
+        with start_run(PLATFORM, "reply") as run_ctx:
+            return await manual_reply(config.load(), run_ctx, row, text)
+
+    r = _run(main())
+    if r.status == "blocked":
+        typer.secho(f"🛡️ 被护栏拦下：{'；'.join(json.loads(r.guard_reasons))}", fg="yellow")
+        raise typer.Exit(1)
+    if r.status == "sent":
+        typer.secho("✅ 已发送", fg="green")
+    elif r.status == "partial":
+        typer.secho(f"⚠️ 只发出一部分：{r.error}", fg="yellow")
+        raise typer.Exit(1)
+    else:
+        typer.secho(f"❌ 发送失败：{r.error}", fg="red")
+        raise typer.Exit(1)
 
 
 spike_app = typer.Typer(help="M0 Spike：只记录数据结构，不保存取值", no_args_is_help=True)

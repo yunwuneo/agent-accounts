@@ -193,12 +193,12 @@ def config_show() -> None:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(1) from None
     path = paths.config_path()
-    typer.echo(f"自动回复：douyin.auto_reply = {cfg.douyin.auto_reply}")
-    d = cfg.douyin
-    typer.echo(
-        f"[douyin 节奏] 每 {d.interval_min_s}–{d.interval_max_s} 秒一轮；"
-        f"休息时段 {', '.join(d.quiet_hours) or '无'}"
-    )
+    for name, d in (("douyin", cfg.douyin), ("xiaohongshu", cfg.xiaohongshu)):
+        typer.echo(f"自动回复：{name}.auto_reply = {d.auto_reply}")
+        typer.echo(
+            f"[{name} 节奏] 每 {d.interval_min_s}–{d.interval_max_s} 秒一轮；"
+            f"休息时段 {', '.join(d.quiet_hours) or '无'}"
+        )
     typer.echo(f"配置文件：{path}{'' if path.exists() else '（不存在，使用默认值）'}")
     sections = {
         "llm.understand（媒体理解）": cfg.llm.understand,

@@ -4,7 +4,8 @@
 （``messages/read``）。所以：
 
 - 只点开 ``max_store_id`` 大于本地进度的会话，不重复打开没有新消息的会话；
-- 官方账号、平台 AI 助手不打开；每轮最多打开 ``max_open`` 个；
+- 只打开已关注的会话（陌生人的消息和关注请求一概不管、不点开）；官方账号、平台 AI 助手不打开；
+  每轮最多打开 ``max_open`` 个；
 - ``open_chats=False`` 时只更新会话列表和未读数，完全不标已读；
 - 每次打开都记录在结果和审计里，并统计已读上报次数。
 """
@@ -108,12 +109,28 @@ class SyncResult:
     errors: list[str] = field(default_factory=list)
 
 
+def pick_to_open(
+    convs: list[xstore.XhsConversation], *, open_chats: bool, max_open: int
+) -> tuple[list[xstore.XhsConversation], list[str]]:
+    """要点开的会话，以及有新消息但本轮没打开的会话 ID。
+
+    只看已关注的会话；陌生人、官方号、平台 AI 助手有新消息也不点开，不计入 skipped。
+    """
+    candidates = [
+        c for c in convs
+        if c.has_new and c.followed and not c.is_official and not c.is_ai_assistant
+    ]  # fmt: skip
+    to_open = candidates[:max_open] if open_chats else []
+    opening = {c.peer_id for c in to_open}
+    return to_open, [c.peer_id for c in candidates if c.peer_id not in opening]
+
+
 async def _ensure_ok(page: Page) -> None:
     if await detect_block(page):
         raise HumanRequired("触发小红书验证或风控", freeze=True)
 
 
-async def _click_conversation(page: Page, peer_id: str, name: str | None) -> bool:
+async def click_conversation(page: Page, peer_id: str, name: str | None) -> bool:
     items = page.locator(CONV_ITEM)
     count = await items.count()
     for i in range(count):
@@ -153,7 +170,7 @@ async def _open_and_fetch(
     opened = OpenedChat(peer_id=conv.peer_id, name=conv.name)
     before = len(collector.history)
     await s.pause()
-    if not await _click_conversation(s.page, conv.peer_id, conv.name):
+    if not await click_conversation(s.page, conv.peer_id, conv.name):
         opened.error = "会话列表里找不到这个会话"
         return opened, []
     run.audit("xiaohongshu.open_chat", peer=conv.peer_id)  # 点进会话 = 平台标已读
@@ -231,20 +248,17 @@ async def sync_in_session(
             raise HumanRequired("没有拿到自己的用户 ID", "user/me 接口可能改版")
 
         result.conversations = xstore.apply_chats(collector.chats.values(), collector.unread)
-        candidates = [
-            c
-            for c in result.conversations
-            if c.has_new and not c.is_official and not c.is_ai_assistant
-        ]
-        to_open = candidates[:max_open] if open_chats else []
-        opening = {c.peer_id for c in to_open}
-        result.skipped = [c.peer_id for c in candidates if c.peer_id not in opening]
+        to_open, result.skipped = pick_to_open(
+            result.conversations, open_chats=open_chats, max_open=max_open
+        )
 
         for conv in to_open:
             opened, messages = await _open_and_fetch(
                 s, collector, conv, max_pages=max_pages, run=run
             )
             applied = xstore.apply_messages(messages, collector.my_id, run_id=run.id)
+            if opened.error is None:
+                xstore.mark_opened(conv.peer_id)
             opened.new = len(applied.new_messages)
             result.new_messages += applied.new_messages
             result.revoked += applied.revoked

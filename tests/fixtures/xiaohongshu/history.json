@@ -91,7 +91,7 @@
     "group_chat": false,
     "extra_status": 0,
     "range_blank_end_store_id": 0,
-    "content": "{\"content\": \"\", \"content_type\": 100, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"你们已互相关注\"}"
+    "content": "{\"content\": \"\", \"content_type\": 0, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"你们已互相关注\"}"
    }
   ]
  }
