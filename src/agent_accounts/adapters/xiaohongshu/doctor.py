@@ -43,6 +43,19 @@ async def detect_block(page: Page) -> bool:
     return False
 
 
+async def login_visible(page: Page) -> bool:
+    login = page.get_by_role("button", name=re.compile(r"^登录$"))
+    return bool(await login.count() and await login.first.is_visible())
+
+
+async def logged_in(page: Page) -> bool:
+    """登录后侧栏有指向自己主页的「我」；未登录时有「登录」按钮。"""
+    if await login_visible(page):
+        return False
+    me = page.locator('a[href*="/user/profile/"]')
+    return bool(await me.count() and await me.first.is_visible())
+
+
 async def doctor(cfg: Config, run: RunContext) -> DoctorResult:
     recorder = MetadataRecorder()
     # 真实平台强制 headed；不允许配置文件把本探针切到 headless。
@@ -52,14 +65,12 @@ async def doctor(cfg: Config, run: RunContext) -> DoctorResult:
         await session.page.wait_for_timeout(2000)
         if await detect_block(session.page):
             raise HumanRequired("触发小红书验证或风控", freeze=True)
-        login = session.page.get_by_role("button", name=re.compile(r"^登录$"))
-        login_visible = bool(await login.count() and await login.first.is_visible())
         result = DoctorResult(
             chat_page=session.page.url.split("?", 1)[0].rstrip("/") == CHAT_URL,
-            login_visible=login_visible,
+            login_visible=await login_visible(session.page),
             network=recorder.summary(),
         )
-        if login_visible:
+        if result.login_visible:
             raise HumanRequired("小红书尚未人工登录")
         if not result.chat_page:
             raise HumanRequired("未进入小红书私信页，请人工检查登录或权限状态")

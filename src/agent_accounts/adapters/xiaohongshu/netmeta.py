@@ -26,18 +26,23 @@ _STATIC_SEGMENTS = frozenset(
         "web",
     }
 )
+# 纯小写单词（可带下划线）是接口名，不是标识；含数字、连字符的一律遮蔽
+_WORD_SEGMENT = re.compile(r"[a-z][a-z_]{0,31}")
 _SAFE_HOST = re.compile(r"(?:[a-z0-9-]+\.)*xiaohongshu\.com", re.I)
 _SAFE_MIME = re.compile(r"[a-z0-9.+-]+/[a-z0-9.+-]+", re.I)
 
 
 def endpoint_shape(url: str) -> str:
-    """只保留平台域名和已知静态路径段；动态 ID、查询串全部丢弃。"""
+    """只保留平台域名和单词形状的路径段；动态 ID、查询串全部丢弃。"""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if not _SAFE_HOST.fullmatch(host):
         return "external"
     segments = [segment for segment in parts.path.split("/") if segment]
-    path = "/".join(segment if segment in _STATIC_SEGMENTS else ":id" for segment in segments[:8])
+    path = "/".join(
+        segment if segment in _STATIC_SEGMENTS or _WORD_SEGMENT.fullmatch(segment) else ":id"
+        for segment in segments[:8]
+    )
     return f"xiaohongshu.com/{path}" if path else "xiaohongshu.com"
 
 
