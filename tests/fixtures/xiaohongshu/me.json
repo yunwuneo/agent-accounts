@@ -1,0 +1,10 @@
+{
+ "code": 0,
+ "success": true,
+ "msg": "成功",
+ "data": {
+  "user_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+  "nickname": "agent",
+  "guest": false
+ }
+}

@@ -1,0 +1,63 @@
+{
+ "code": 0,
+ "success": true,
+ "msg": "成功",
+ "data": {
+  "page": 1,
+  "total": 3,
+  "next_ts": 0,
+  "chats": [
+   {
+    "user_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "chat_user_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "last_msg_time": 1790000300000,
+    "last_msg_content": "[笔记]",
+    "max_store_id": 6,
+    "info": {
+     "nickname": "测试好友",
+     "user_name": "测试好友",
+     "follow_status": "both",
+     "is_friend": true,
+     "is_official": false,
+     "is_ai_assistant": false,
+     "avatar": "https://sns-avatar.example/x.jpg",
+     "fan_num": 1
+    }
+   },
+   {
+    "user_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "chat_user_id": "cccccccccccccccccccccccc",
+    "last_msg_time": 1790000100000,
+    "last_msg_content": "你好",
+    "max_store_id": 2,
+    "info": {
+     "nickname": "陌生人",
+     "user_name": "陌生人",
+     "follow_status": "none",
+     "is_friend": false,
+     "is_official": false,
+     "is_ai_assistant": false,
+     "avatar": "https://sns-avatar.example/x.jpg",
+     "fan_num": 1
+    }
+   },
+   {
+    "user_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "chat_user_id": "dddddddddddddddddddddddd",
+    "last_msg_time": 1790000000000,
+    "last_msg_content": "系统通知",
+    "max_store_id": 9,
+    "info": {
+     "nickname": "官方",
+     "user_name": "官方",
+     "follow_status": "none",
+     "is_friend": false,
+     "is_official": true,
+     "is_ai_assistant": false,
+     "avatar": "https://sns-avatar.example/x.jpg",
+     "fan_num": 1
+    }
+   }
+  ]
+ }
+}

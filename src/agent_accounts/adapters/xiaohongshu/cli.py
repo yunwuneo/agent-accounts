@@ -14,7 +14,7 @@ from agent_accounts.core.config import ConfigError
 from agent_accounts.core.errors import AccountFrozen, HumanRequired
 from agent_accounts.core.run import start_run
 
-app = typer.Typer(help="小红书适配器（M0 只读探针）", no_args_is_help=True)
+app = typer.Typer(help="小红书适配器", no_args_is_help=True)
 
 
 @app.callback()
@@ -60,6 +60,139 @@ def doctor() -> None:
         typer.echo(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
 
     _run(main())
+
+
+def _local(dt) -> str:
+    return dt.astimezone().strftime("%m-%d %H:%M") if dt else "--"
+
+
+def _conv_json(c) -> dict:
+    return {
+        "peer_id": c.peer_id,
+        "name": c.name,
+        "follow_status": c.follow_status,
+        "is_friend": c.is_friend,
+        "unread": c.unread,
+        "has_new": c.has_new,
+        "last_at": c.last_at.isoformat() if c.last_at else None,
+        "last_preview": c.last_preview,
+    }
+
+
+def _msg_json(m) -> dict:
+    return {
+        "msg_id": m.msg_id,
+        "peer_id": m.peer_id,
+        "store_id": m.store_id,
+        "from_me": m.from_me,
+        "type": m.type,
+        "revoked": m.revoked,
+        "sent_at": m.sent_at.isoformat() if m.sent_at else None,
+        "text": m.text,
+        "note_id": m.note_id,
+        "note_type": m.note_type,
+        "note_title": m.note_title,
+        "note_author": m.note_author,
+        "image_url": m.image_url,
+    }
+
+
+def _print_conversations(convs) -> None:
+    for c in convs:
+        badge = f"({c.unread})" if c.unread else ("(新)" if c.has_new else "   ")
+        typer.echo(f"{badge:>4} {_local(c.last_at)}  {c.name or c.peer_id}  {c.last_preview or ''}")
+
+
+@app.command()
+def sync(
+    open_chats: bool = typer.Option(
+        True, "--open/--no-open", help="点进有新消息的会话拉取消息（会被平台标为已读）"
+    ),
+    max_open: int = typer.Option(5, min=1, max=20, help="每轮最多点开几个会话"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """打开私信首页同步会话列表；只点开有新消息的会话拉取消息入库。
+
+    注意：小红书必须点进会话才能读到完整消息，点进去对方就会看到「已读」。
+    --no-open 只更新会话列表和未读数，不标已读。
+    """
+    from agent_accounts.adapters.xiaohongshu.sync import sync as do_sync
+
+    async def main() -> None:
+        with start_run(PLATFORM, "sync") as run:
+            r = await do_sync(config.load(), run, open_chats=open_chats, max_open=max_open)
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "conversations": [_conv_json(c) for c in r.conversations],
+                        "opened": [o.__dict__ for o in r.opened],
+                        "skipped": r.skipped,
+                        "new_messages": [_msg_json(m) for m in r.new_messages],
+                        "revoked": r.revoked,
+                        "read_requests": r.read_requests,
+                        "errors": r.errors,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
+        typer.echo(
+            f"会话 {len(r.conversations)} 个，点开 {len(r.opened)} 个，"
+            f"新消息 {len(r.new_messages)} 条" + (f"，撤回 {r.revoked} 条" if r.revoked else "")
+        )
+        for o in r.opened:
+            gap = "（仍有更早的消息没拉到）" if o.gap else ""
+            status = o.error or f"拉到 {o.fetched} 条，新 {o.new} 条，{o.pages} 页{gap}"
+            typer.echo(f"  👁 {o.name or o.peer_id}：{status}")
+        for m in r.new_messages:
+            who = "我" if m.from_me else "对方"
+            typer.echo(f"  {_local(m.sent_at)} {who}：{m.preview()}")
+        if r.skipped:
+            typer.secho(f"有新消息但本轮没打开：{len(r.skipped)} 个会话", fg="yellow")
+        if r.errors:
+            typer.secho(f"问题 {len(r.errors)} 个：{r.errors[:3]}", fg="yellow")
+        if r.opened:
+            typer.echo(f"已读上报 {r.read_requests} 次（点开的会话对方会看到已读）")
+
+    _run(main())
+
+
+@app.command()
+def inbox(as_json: bool = typer.Option(False, "--json", help="输出 JSON")) -> None:
+    """本地数据库里的会话列表（不打开浏览器；先用 sync 同步）。"""
+    from agent_accounts.adapters.xiaohongshu import store as xstore
+
+    convs = xstore.list_conversations()
+    if as_json:
+        typer.echo(json.dumps([_conv_json(c) for c in convs], ensure_ascii=False, indent=2))
+    else:
+        _print_conversations(convs)
+
+
+@app.command()
+def thread(
+    peer: str = typer.Argument(..., help="对方用户 ID 或昵称（包含匹配）"),
+    limit: int = typer.Option(30, help="最多显示多少条"),
+    as_json: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """本地数据库里的会话消息（不打开浏览器；先用 sync 同步）。"""
+    from agent_accounts.adapters.xiaohongshu import store as xstore
+
+    row = xstore.find_conversation(peer)
+    if row is None:
+        typer.secho(f"找不到会话：{peer}（用 xiaohongshu inbox 查看）", fg="red", err=True)
+        raise typer.Exit(1)
+    msgs = xstore.list_messages(row.peer_id, limit=limit)
+    if as_json:
+        typer.echo(json.dumps([_msg_json(m) for m in msgs], ensure_ascii=False, indent=2))
+        return
+    typer.secho(f"{row.name or row.peer_id}（未读 {row.unread}）", bold=True)
+    for m in msgs:
+        who = "我" if m.from_me else "对方"
+        extra = f"  note_id={m.note_id}" if m.note_id else ""
+        typer.echo(f"{_local(m.sent_at)} {who}：{m.preview()}{extra}")
 
 
 spike_app = typer.Typer(help="M0 Spike：只记录数据结构，不保存取值", no_args_is_help=True)
