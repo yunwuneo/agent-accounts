@@ -19,13 +19,14 @@ from typing import Any
 from agent_accounts.adapters.douyin import digest as ddigest
 from agent_accounts.adapters.douyin import store as dstore
 from agent_accounts.adapters.douyin.page import open_home
+from agent_accounts.adapters.douyin.reply_tools import DouyinShareAnalyzer
 from agent_accounts.adapters.douyin.replying import guard_input, send_in_session
 from agent_accounts.adapters.douyin.sync import sync_in_session
 from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import digests, guard, persona
 from agent_accounts.core.config import Config
 from agent_accounts.core.reply import ChatLine, ReplyError, decide
-from agent_accounts.core.reply_tools import RefBook, ReplyToolbox
+from agent_accounts.core.reply_tools import MediaBudget, RefBook, ReplyToolbox
 from agent_accounts.core.run import RunContext
 
 PLATFORM = "douyin"
@@ -35,7 +36,8 @@ PLATFORM = "douyin"
 class ConvOutcome:
     conv_id: str
     name: str | None
-    action: str  # baseline / no_new / blocked / skipped / dry_run / sent / failed / error
+    # baseline / no_new / blocked / skipped / dry_run / sent / failed / error / deferred
+    action: str
     reply: dstore.DouyinReply | None = None
     detail: str = ""
 
@@ -45,6 +47,7 @@ class TickResult:
     mode: str
     outcomes: list[ConvOutcome] = field(default_factory=list)
     digested: int = 0
+    share_attempts: int = 0
 
 
 def _share_line(m: dstore.DouyinMessage, refs: RefBook | None = None) -> str:
@@ -56,7 +59,9 @@ def _share_line(m: dstore.DouyinMessage, refs: RefBook | None = None) -> str:
     if d is None:
         return line + " —— 作品内容还没有分析"
     hooks = "；".join(d.reply_hooks)
-    return f"{line} —— 作品摘要：{d.summary} 氛围：{d.vibe} 可以聊的点：{hooks}"
+    unavailable = "（作品不可见，只根据卡片理解）" if not d.available else ""
+    notes = f" 说明：{'；'.join(d.notes)}" if d.notes else ""
+    return f"{line}{unavailable} —— 作品摘要：{d.summary} 氛围：{d.vibe} 可以聊的点：{hooks}{notes}"
 
 
 def _line(m: dstore.DouyinMessage, new_ids: set[str], refs: RefBook | None) -> ChatLine:
@@ -109,8 +114,8 @@ class DouyinChatSource:
 
 
 def new_peer_messages(conv: dstore.DouyinConversation) -> list[dstore.DouyinMessage]:
-    msgs = dstore.list_messages(conv.conv_id, limit=200)
-    return [m for m in msgs if not m.from_me and m.msg_index > (conv.handled_index or 0)]
+    msgs = dstore.list_messages(conv.conv_id, limit=None, after_index=conv.handled_index or 0)
+    return [m for m in msgs if not m.from_me]
 
 
 def effective_mode(cfg: Config, *, dry_run: bool, allow_send: bool) -> str:
@@ -130,6 +135,7 @@ async def _decide_and_act(
     mode: str,
     source: str,
     use_tools: bool = False,
+    media_budget: MediaBudget | None = None,
 ) -> ConvOutcome:
     now = datetime.now(UTC)
     trigger_types = [m.type for m in new_msgs]
@@ -166,6 +172,15 @@ async def _decide_and_act(
     # 2) 回复决策（可选：先调用只读工具）
     new_ids = {m.msg_id for m in new_msgs}
     context = dstore.list_messages(conv.conv_id, limit=cfg.douyin.context_messages)
+    # 最近 N 条之外，也必须包含最早一条新消息到现在的完整区间（含我方穿插的消息）。
+    required = dstore.list_messages(
+        conv.conv_id,
+        limit=None,
+        after_index=min(m.msg_index for m in new_msgs) - 1,
+    )
+    context = sorted(
+        {m.msg_id: m for m in context + required + new_msgs}.values(), key=lambda m: m.msg_index
+    )
     refs = RefBook() if use_tools else None
     lines = [_line(m, new_ids, refs) for m in context]
     toolbox = None
@@ -177,6 +192,13 @@ async def _decide_and_act(
             conv.conv_id,
             max_rounds=cfg.reply_tools.max_rounds,
             audit=run.audit,
+            share_analyzer=(
+                DouyinShareAnalyzer(cfg, conv.conv_id, s, run)
+                if "analyze_share" in cfg.reply_tools.paid
+                else None
+            ),
+            max_paid_calls=cfg.reply_tools.max_paid_calls,
+            media_budget=media_budget,
         )
     try:
         d = await decide(
@@ -231,14 +253,26 @@ async def _decide_and_act(
     return ConvOutcome(conv.conv_id, conv.name, reply.status, reply, reply.error or d.text)
 
 
-async def _ensure_digests(
-    s: BrowserSession, cfg: Config, run: RunContext, msgs: list[dstore.DouyinMessage], budget: int
-) -> int:
+def _missing_shares(msgs: list[dstore.DouyinMessage]) -> list[str]:
     ids = []
     for m in msgs:
         if m.aweme_id and m.aweme_id not in ids and digests.get(PLATFORM, m.aweme_id) is None:
             ids.append(m.aweme_id)
-    ids = ids[:budget]
+    return ids
+
+
+async def _ensure_digests(
+    s: BrowserSession,
+    cfg: Config,
+    run: RunContext,
+    msgs: list[dstore.DouyinMessage],
+    budget: MediaBudget,
+) -> int:
+    ids = [id_ for id_ in _missing_shares(msgs) if ("analyze_share", id_) not in budget.attempted][
+        : max(0, budget.remaining)
+    ]
+    budget.remaining -= len(ids)
+    budget.attempted.update(("analyze_share", id_) for id_ in ids)
     if ids:
         await ddigest.digest_in_session(s, cfg, run, ids)
     return len(ids)
@@ -249,9 +283,9 @@ async def run_once(
 ) -> TickResult:
     mode = effective_mode(cfg, dry_run=dry_run, allow_send=allow_send)
     result = TickResult(mode=mode)
-    async with BrowserSession(PLATFORM, cfg.browser) as s:
+    async with BrowserSession(PLATFORM, cfg.browser, headless=False) as s:
         await sync_in_session(s, cfg, run)
-        budget = cfg.douyin.digest_per_tick
+        budget = MediaBudget(cfg.douyin.digest_per_tick)
         for conv in dstore.list_conversations():
             if conv.handled_index is None:  # 首次见到：只记基线
                 if conv.last_index is not None:
@@ -261,20 +295,62 @@ async def run_once(
             new_msgs = new_peer_messages(conv)
             if not new_msgs:
                 continue
-            n = await _ensure_digests(s, cfg, run, new_msgs, budget)
-            budget -= n
-            result.digested += n
+            pre = guard.check(
+                cfg.guard,
+                guard_input(
+                    cfg,
+                    conv,
+                    text="",
+                    should_reply=False,
+                    confidence=None,
+                    trigger_types=[m.type for m in new_msgs],
+                    manual=False,
+                    now=datetime.now(UTC),
+                ),
+            )
+            if pre.ok:
+                result.digested += await _ensure_digests(s, cfg, run, new_msgs, budget)
+                missing = _missing_shares(new_msgs)
+                malformed = any(
+                    m.type in ("video_share", "note_share") and not m.aweme_id for m in new_msgs
+                )
+                if missing or malformed:
+                    detail = (
+                        "分享卡片缺少作品 ID，暂不回复"
+                        if malformed
+                        else f"还有 {len(missing)} 个新分享未分析成功，留到下一轮"
+                    )
+                    result.outcomes.append(
+                        ConvOutcome(conv.conv_id, conv.name, "deferred", detail=detail)
+                    )
+                    run.audit(
+                        "douyin.reply.deferred",
+                        conv_id=conv.conv_id,
+                        pending=len(missing),
+                        malformed=malformed,
+                    )
+                    continue
             outcome = await _decide_and_act(
-                s, cfg, run, conv, new_msgs, mode, "auto", cfg.reply_tools.enabled
+                s,
+                cfg,
+                run,
+                conv,
+                new_msgs,
+                mode,
+                "auto",
+                cfg.reply_tools.enabled,
+                media_budget=budget,
             )
             if outcome.action != "error":  # 模型出错时不推进，下一轮重试
                 dstore.set_handled(conv.conv_id, max(m.msg_index for m in new_msgs))
             result.outcomes.append(outcome)
+        result.share_attempts = budget.share_attempts
     run.audit(
         "douyin.run",
         mode=mode,
         outcomes=[{"conv_id": o.conv_id, "action": o.action} for o in result.outcomes],
         digested=result.digested,
+        share_attempts=result.share_attempts,
     )
     return result
 

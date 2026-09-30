@@ -1,4 +1,4 @@
-"""回复模型工具（Notion「回复模型工具调用：设计方案」S1 本地查询 + S2 可选图片理解）。
+"""回复模型工具（Notion「回复模型工具调用：设计方案」S1 本地查询 + S2 图片理解 + S3 分享补分析）。
 
 回复模型在一次决策里可以按需调用这些工具，查完再给出 ReplyDecision：
 
@@ -6,11 +6,12 @@
 - ``search_messages``：在本会话的本地记录里按关键词找消息
 - ``get_share_detail``：某条分享（S1、S2…）的完整分析结果
 - ``get_peer_info``：对方的昵称、关注关系、聊天时长等
-- ``view_image``：显式启用后，通过平台的 ImageViewer 查缓存或调用理解模型
+- ``view_image``：显式启用后，查私信图片缓存或调用理解模型
+- ``analyze_share``：显式启用后，复用平台 digest 补分析当前会话里的分享
 
 约束：
 - 会话由代码绑定，工具参数里没有会话 ID；分享只能用本次决策里出现过的编号引用
-- 本地查询由适配器实现 ``ChatSource``；图片工具复用已有浏览器，受付费预算限制，不发送
+- 本地查询由适配器实现 ``ChatSource``；媒体工具复用已有浏览器，受付费预算限制，不发送
 - 参数不对、编号不存在时作为错误结果交回模型；其他异常不接住，直接中止这次决策
 - 审计只记工具名、参数摘要、结果字数和耗时，不记内容
 """
@@ -99,13 +100,13 @@ class ToolCall:
     ok: bool
     chars: int
     ms: int
-    paid: bool = False  # 是否已经开始调用理解模型（失败也算）
+    paid: bool = False  # 是否已经开始调用理解或转写模型（失败也算）
     cached: bool = False
 
     def describe(self) -> str:
         args = ", ".join(f"{k}={v}" for k, v in self.args.items())
         result = f"{self.chars} 字" if self.ok else "出错"
-        extra = "（缓存）" if self.cached else ("（已调用理解模型）" if self.paid else "")
+        extra = "（缓存）" if self.cached else ("（已调用媒体模型）" if self.paid else "")
         return f"{self.name}({args}) → {result}{extra}"
 
 
@@ -233,9 +234,12 @@ def _definitions() -> list[dict[str, Any]]:
 
 @dataclass
 class MediaBudget:
-    """本轮剩余媒体处理次数，由笔记分析和图片工具共用；失败不退还。"""
+    """本轮剩余媒体处理次数，由自动分享分析、图片工具和补分析工具共用；失败不退还。"""
 
     remaining: int
+    image_attempts: int = 0
+    share_attempts: int = 0
+    attempted: set[tuple[str, str]] = field(default_factory=set)
 
 
 class ImageViewer(Protocol):
@@ -246,7 +250,7 @@ class ImageViewer(Protocol):
         ...
 
     async def analyze(self, message_id: str, on_model: Callable[[], None]) -> str:
-        """未缓存图片的下载及理解；调用模型前通知审计，不接住人工介入异常。"""
+        """未缓存媒体的下载及理解；调用模型前通知审计，不接住人工介入异常。"""
         ...
 
 
@@ -261,6 +265,7 @@ class ReplyToolbox:
     audit: Callable[..., None] | None = None
     calls: list[ToolCall] = field(default_factory=list)
     image_viewer: ImageViewer | None = None  # 只有明确启用付费工具的平台才提供
+    share_analyzer: ImageViewer | None = None  # 同样的缓存 / analyze 接口，输入是作品 ID
     max_paid_calls: int = 2
     media_budget: MediaBudget | None = None
     _paid_attempts: int = field(default=0, init=False)
@@ -283,6 +288,22 @@ class ReplyToolbox:
                     },
                 }
             )
+        if self.share_analyzer is not None:
+            defs.append(
+                {
+                    "name": "analyze_share",
+                    "description": (
+                        "补分析当前会话里尚未分析或之前分析失败的分享（S 编号）。"
+                        "已有结果直接读缓存；新分析消耗媒体预算。"
+                    ),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"ref": {"type": "string", "description": "分享编号，如 S1"}},
+                        "required": ["ref"],
+                        "additionalProperties": False,
+                    },
+                }
+            )
         if strict:  # 代理不支持结构化输出时一般也不认 strict，跟着 structured_output 走
             for d in defs:
                 d["strict"] = True
@@ -295,12 +316,18 @@ class ReplyToolbox:
         outputs = []
         for use in uses:
             if use.name == "view_image" and self.image_viewer is not None:
-                outputs.append(await self._run_image(use))
+                outputs.append(
+                    await self._run_paid(use, self.image_viewer, self.refs.resolve_image)
+                )
+            elif use.name == "analyze_share" and self.share_analyzer is not None:
+                outputs.append(await self._run_paid(use, self.share_analyzer, self.refs.resolve))
             else:
                 outputs.append(self._run(use))
         return outputs
 
-    async def _run_image(self, use: ToolUse) -> ToolOutput:
+    async def _run_paid(
+        self, use: ToolUse, viewer: ImageViewer, resolve: Callable[[str], str]
+    ) -> ToolOutput:
         start = time.monotonic()
         paid = cached = False
         summary: dict[str, Any] = {}
@@ -311,24 +338,30 @@ class ReplyToolbox:
 
         try:
             ref = _ref(use.input).strip().upper()
-            message_id = self.refs.resolve_image(ref)
+            message_id = resolve(ref)
             summary = {"ref": ref}
-            viewer = self.image_viewer
-            assert viewer is not None
             text = viewer.cached(message_id)
             if text is not None:
                 cached = True
             else:
                 if not viewer.available:
-                    raise ToolError("当前没有浏览器，未缓存图片暂不可用，请根据已有信息决定")
+                    raise ToolError("当前没有浏览器，未缓存媒体暂不可用，请根据已有信息决定")
                 if (
                     self._paid_attempts >= self.max_paid_calls
                     or self.media_budget is None
                     or self.media_budget.remaining <= 0
                 ):
-                    raise ToolError("图片理解预算已用完，请根据已有信息决定")
+                    raise ToolError("媒体分析预算已用完，请根据已有信息决定")
+                key = (use.name, message_id)
+                if key in self.media_budget.attempted:
+                    raise ToolError("本轮已尝试分析这条媒体且未成功，暂不重复，请根据已有信息决定")
+                self.media_budget.attempted.add(key)
                 self._paid_attempts += 1
                 self.media_budget.remaining -= 1
+                if use.name == "view_image":
+                    self.media_budget.image_attempts += 1
+                else:
+                    self.media_budget.share_attempts += 1
                 text = await viewer.analyze(message_id, on_model)
             out = ToolOutput(_clip(text, MAX_RESULT_CHARS))
         except ToolError as e:

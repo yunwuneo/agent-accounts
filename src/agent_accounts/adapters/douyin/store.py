@@ -218,9 +218,10 @@ def recent_messages(*, limit: int = 30) -> list[DouyinMessage]:
 def list_messages(
     conv_id: str,
     *,
-    limit: int = 30,
+    limit: int | None = 30,
     since: datetime | None = None,
     before_index: int | None = None,
+    after_index: int | None = None,
 ) -> list[DouyinMessage]:
     """会话里最近的 limit 条（按先后排列）；给了 before_index 时只取更早的。"""
     with store.session() as s:
@@ -229,6 +230,8 @@ def list_messages(
             q = q.where(col(DouyinMessage.sent_at) >= _utc(since))
         if before_index is not None:
             q = q.where(col(DouyinMessage.msg_index) < before_index)
+        if after_index is not None:
+            q = q.where(col(DouyinMessage.msg_index) > after_index)
         rows = s.exec(q.order_by(col(DouyinMessage.msg_index).desc()).limit(limit)).all()
     return list(reversed(rows))
 

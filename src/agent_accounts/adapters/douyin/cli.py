@@ -451,6 +451,7 @@ _ACTION = {
     "partial": "⚠️ 只发出一部分",
     "error": "⚠️ 出错",
     "no_new": "（没有可处理的消息）",
+    "deferred": "⏳ 新分享尚未分析完成，暂缓回复",
 }
 
 
@@ -476,7 +477,7 @@ def _print_outcome(o) -> None:
         conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
         typer.echo(f"    理由：{r.reason}{conf}")
     _print_tools(r)
-    if o.action in ("blocked", "error", "failed", "partial") and o.detail:
+    if o.action in ("blocked", "error", "failed", "partial", "deferred") and o.detail:
         typer.echo(f"    原因：{o.detail}")
 
 
@@ -506,7 +507,11 @@ def run(
         with start_run(PLATFORM, "run") as run_ctx:
             result = await run_once(cfg, run_ctx, dry_run=dry_run, allow_send=allow_send)
         stamp = datetime.now().strftime("%H:%M:%S")
-        typer.secho(f"[{stamp}] 模式：{result.mode}，分析作品 {result.digested} 个", bold=True)
+        typer.secho(
+            f"[{stamp}] 模式：{result.mode}，分析作品 {result.digested} 个，"
+            f"工具补分析分享 {result.share_attempts} 个",
+            bold=True,
+        )
         for o in result.outcomes:
             _print_outcome(o)
         if not result.outcomes:

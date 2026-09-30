@@ -170,6 +170,11 @@ async def decide(
                 "\n- 图片后的 I1、I2 是图片编号，可用 view_image 查询；缓存之外的图片理解有预算，"
                 "工具不可用或失败时不要编造图片内容。"
             )
+        if tools.share_analyzer is not None:
+            common["system"] += (
+                "\n- 旧分享没有分析时，可用 analyze_share 按 S 编号补分析；"
+                "调用受媒体预算限制，失败或不可用时明确信息不足，不编造内容。"
+            )
         decision = await llm.call_json_with_tools(
             cfg,
             **common,

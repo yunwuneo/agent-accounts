@@ -1,4 +1,4 @@
-"""小红书付费回复工具：仅处理本会话对方发送、未撤回的私信图片。"""
+"""小红书付费回复工具：本会话私信图片理解与分享补分析。"""
 
 from __future__ import annotations
 
@@ -10,15 +10,18 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as BrowserError
+from sqlmodel import col, select
 
 from agent_accounts.adapters.xiaohongshu import PLATFORM
+from agent_accounts.adapters.xiaohongshu import digest as xdigest
 from agent_accounts.adapters.xiaohongshu import store as xstore
 from agent_accounts.adapters.xiaohongshu.doctor import detect_captcha, login_visible
 from agent_accounts.browser.session import BrowserSession
-from agent_accounts.core import image_descriptions, media, store
+from agent_accounts.core import digests, image_descriptions, media, store
 from agent_accounts.core.config import Config, ConfigError
 from agent_accounts.core.errors import HumanRequired
-from agent_accounts.core.reply_tools import ToolError
+from agent_accounts.core.reply_tools import ToolError, share_detail
+from agent_accounts.core.run import RunContext
 from agent_accounts.core.understand import UnderstandError
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -26,9 +29,9 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 async def _check_session(s: BrowserSession) -> None:
     if await detect_captcha(s.page):
-        raise HumanRequired("图片理解期间触发小红书验证或风控", freeze=True)
+        raise HumanRequired("媒体分析期间触发小红书验证或风控", freeze=True)
     if await login_visible(s.page):
-        raise HumanRequired("图片理解期间小红书登录失效", freeze=True)
+        raise HumanRequired("媒体分析期间小红书登录失效", freeze=True)
 
 
 async def download_image(s: BrowserSession, url: str, dest: Path) -> Path:
@@ -140,3 +143,54 @@ class XhsImageViewer:
         return image_descriptions.save(
             PLATFORM, message_id, self.cfg.llm.understand.model, result
         ).render()
+
+
+class XhsShareAnalyzer:
+    def __init__(self, cfg: Config, peer_id: str, session: BrowserSession | None, run: RunContext):
+        self.cfg, self.peer_id, self.session, self.run = cfg, peer_id, session, run
+
+    @property
+    def available(self) -> bool:
+        return self.session is not None
+
+    def _message(self, item_id: str) -> xstore.XhsMessage:
+        with store.session() as db:
+            msg = db.exec(
+                select(xstore.XhsMessage)
+                .where(
+                    xstore.XhsMessage.peer_id == self.peer_id,
+                    xstore.XhsMessage.note_id == item_id,
+                    xstore.XhsMessage.type == "note",
+                    col(xstore.XhsMessage.revoked).is_(False),
+                )
+                .order_by(col(xstore.XhsMessage.store_id).desc())
+            ).first()
+        if msg is None:
+            raise ToolError("当前会话没有这条未撤回的笔记分享")
+        return msg
+
+    def cached(self, item_id: str) -> str | None:
+        self._message(item_id)
+        return share_detail(PLATFORM, item_id) if digests.get(PLATFORM, item_id) else None
+
+    async def analyze(self, item_id: str, on_model: Callable[[], None]) -> str:
+        msg = self._message(item_id)
+        if self.session is None:
+            raise ToolError("当前没有浏览器，分享补分析暂不可用")
+        try:
+            await _check_session(self.session)
+            out = await xdigest._digest_one(
+                self.session,
+                self.cfg,
+                self.run,
+                item_id,
+                message=msg,
+                on_model=on_model,
+            )
+            await _check_session(self.session)
+        except BrowserError as exc:
+            raise ToolError(f"分享补分析失败（{type(exc).__name__}）") from None
+        self._message(item_id)
+        if out.error or out.digest is None:
+            raise ToolError("分享补分析未成功，请根据已有信息决定")
+        return share_detail(PLATFORM, item_id)

@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from playwright.async_api import Error as BrowserError
 from sqlmodel import col, select
 
 from agent_accounts.adapters.xiaohongshu import PLATFORM
@@ -22,7 +24,7 @@ from agent_accounts.adapters.xiaohongshu import media as xmedia
 from agent_accounts.adapters.xiaohongshu import store as xstore
 from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import digests, media, store, watch
-from agent_accounts.core.config import Config
+from agent_accounts.core.config import Config, ConfigError
 from agent_accounts.core.errors import HumanRequired
 from agent_accounts.core.run import RunContext
 from agent_accounts.core.transcribe import transcribe
@@ -78,7 +80,12 @@ class DigestOutcome:
 
 
 async def _build_input(
-    s: BrowserSession, cfg: Config, note: xmedia.XhsNote, tmp: Path
+    s: BrowserSession,
+    cfg: Config,
+    note: xmedia.XhsNote,
+    tmp: Path,
+    *,
+    on_model: Callable[[], None] | None = None,
 ) -> tuple[UnderstandInput, list[str]]:
     notes: list[str] = []
     inp = UnderstandInput(
@@ -100,8 +107,15 @@ async def _build_input(
         if video is None:
             notes.append("没有拿到视频播放地址，只根据文字信息理解")
         else:
+
+            async def counted(endpoint, audio):
+                if on_model:
+                    endpoint.require_key("transcribe")
+                    on_model()
+                return await transcribe(endpoint, audio)
+
             frames, inp.transcript = await watch.frames_and_transcript(
-                cfg, video, tmp, notes, transcribe=transcribe
+                cfg, video, tmp, notes, transcribe=counted
             )
             inp.images, inp.frame_times = frames.paths, frames.times
             inp.duration_s = inp.duration_s or frames.duration_s
@@ -122,9 +136,14 @@ async def _build_input(
 
 
 async def _unavailable_input(
-    s: BrowserSession, cfg: Config, note: xmedia.XhsNote, tmp: Path
+    s: BrowserSession,
+    cfg: Config,
+    note: xmedia.XhsNote,
+    tmp: Path,
+    *,
+    message: xstore.XhsMessage | None = None,
 ) -> tuple[UnderstandInput, list[str]]:
-    msg = share_message(note.note_id)
+    msg = message if message is not None else share_message(note.note_id)
     reason = (
         f"笔记当前不可看（{note.unavailable_reason}），"
         "只能根据私信分享卡片的标题、作者和封面理解，可能不完整"
@@ -142,6 +161,8 @@ async def _unavailable_input(
             inp.images = [
                 await media.to_jpeg(raw, tmp / "cover.jpg", max_side=cfg.media.frame_width)
             ]
+        except HumanRequired:
+            raise
         except Exception as e:  # 封面拿不到也继续，只用文字
             return inp, [reason, f"封面下载失败：{type(e).__name__}"]
     return inp, [reason]
@@ -183,9 +204,15 @@ async def digest_in_session(
 
 
 async def _digest_one(
-    s: BrowserSession, cfg: Config, run: RunContext, note_id: str
+    s: BrowserSession,
+    cfg: Config,
+    run: RunContext,
+    note_id: str,
+    *,
+    message: xstore.XhsMessage | None = None,
+    on_model: Callable[[], None] | None = None,
 ) -> DigestOutcome:
-    msg = share_message(note_id)
+    msg = message if message is not None else share_message(note_id)
     if msg is None or not msg.note_xsec_token:
         return DigestOutcome(note_id, error="私信里没有这篇笔记的分享卡片（缺 xsec_token）")
     hint: xmedia.Kind = "video" if msg.note_type == "video" else "note"
@@ -195,14 +222,26 @@ async def _digest_one(
             return DigestOutcome(note_id, error="没有拿到笔记数据")
         with tempfile.TemporaryDirectory(prefix="aa-media-") as tmp_dir:
             tmp = Path(tmp_dir)
-            build = _build_input if note.available else _unavailable_input
-            inp, notes = await build(s, cfg, note, tmp)
+            if note.available:
+                inp, notes = await _build_input(s, cfg, note, tmp, on_model=on_model)
+            else:
+                inp, notes = await _unavailable_input(s, cfg, note, tmp, message=msg)
+            cfg.llm.understand.require_key("llm.understand")
+            if on_model:
+                on_model()
             out = await understand(cfg.llm.understand, inp)
     except HumanRequired:
         raise
-    except (UnderstandError, media.MediaError, RuntimeError) as e:
-        run.audit("xiaohongshu.digest.error", note_id=note_id, error=str(e)[:300])
-        return DigestOutcome(note_id, error=str(e))
+    except (
+        UnderstandError,
+        media.MediaError,
+        RuntimeError,
+        ConfigError,
+        BrowserError,
+        OSError,
+    ) as e:
+        run.audit("xiaohongshu.digest.error", note_id=note_id, error=type(e).__name__)
+        return DigestOutcome(note_id, error=f"媒体分析失败（{type(e).__name__}）")
 
     digest = digests.save(
         digests.MediaDigest(

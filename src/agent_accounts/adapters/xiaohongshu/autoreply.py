@@ -23,7 +23,7 @@ from typing import Any
 from agent_accounts.adapters.xiaohongshu import PLATFORM
 from agent_accounts.adapters.xiaohongshu import digest as xdigest
 from agent_accounts.adapters.xiaohongshu import store as xstore
-from agent_accounts.adapters.xiaohongshu.reply_tools import XhsImageViewer
+from agent_accounts.adapters.xiaohongshu.reply_tools import XhsImageViewer, XhsShareAnalyzer
 from agent_accounts.adapters.xiaohongshu.sender import SendError, open_conversation, send_messages
 from agent_accounts.adapters.xiaohongshu.sync import sync_in_session
 from agent_accounts.browser.session import BrowserSession
@@ -53,6 +53,7 @@ class TickResult:
     digested: int = 0
     opened: int = 0
     image_attempts: int = 0
+    share_attempts: int = 0
 
 
 def effective_mode(cfg: Config, *, dry_run: bool, allow_send: bool) -> str:
@@ -310,6 +311,11 @@ async def _decide_and_act(
             max_rounds=cfg.reply_tools.max_rounds,
             audit=run.audit,
             image_viewer=XhsImageViewer(cfg, conv.peer_id, s) if images_enabled else None,
+            share_analyzer=(
+                XhsShareAnalyzer(cfg, conv.peer_id, s, run)
+                if "analyze_share" in cfg.reply_tools.paid
+                else None
+            ),
             max_paid_calls=cfg.reply_tools.max_paid_calls,
             media_budget=media_budget,
         )
@@ -391,6 +397,7 @@ async def run_once(
             todo, left = missing[: max(budget.remaining, 0)], missing[max(budget.remaining, 0) :]
             failed: set[str] = set()
             if todo:
+                budget.attempted.update(("analyze_share", id_) for id_ in todo)
                 outcomes = await xdigest.digest_in_session(s, cfg, run, todo)
                 failed = {o.note_id for o in outcomes if o.error}
                 budget.remaining -= len(todo)
@@ -407,7 +414,6 @@ async def run_once(
                 )
                 continue
 
-            before_images = budget.remaining
             outcome = await _decide_and_act(
                 s,
                 cfg,
@@ -420,10 +426,11 @@ async def run_once(
                 cfg.reply_tools.enabled,
                 media_budget=budget,
             )
-            result.image_attempts += before_images - budget.remaining
             if outcome.action != "error":  # 模型出错时不推进，下一轮重试
                 xstore.set_handled(conv.peer_id, max(m.store_id for m in new_msgs))
             result.outcomes.append(outcome)
+        result.image_attempts = budget.image_attempts
+        result.share_attempts = budget.share_attempts
     run.audit(
         "xiaohongshu.run",
         mode=mode,
@@ -431,6 +438,7 @@ async def run_once(
         outcomes=[{"peer": o.peer_id, "action": o.action} for o in result.outcomes],
         digested=result.digested,
         image_attempts=result.image_attempts,
+        share_attempts=result.share_attempts,
     )
     return result
 

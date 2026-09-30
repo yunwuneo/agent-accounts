@@ -76,8 +76,8 @@ extra_block_words = []   # 额外的禁用词
 [reply_tools]
 enabled = false
 max_rounds = 4           # 每次决策最多调用几轮工具
-paid = []               # 可选 ["view_image"]：小红书私信图片理解，需调用 llm.understand
-max_paid_calls = 2       # 每次决策最多处理几张未缓存图片，同时消耗本轮 digest_per_tick
+paid = []               # 可选 "view_image"（小红书图片）、"analyze_share"（两平台分享补分析）
+max_paid_calls = 2       # 每次决策两种付费工具共用的处理次数，同时消耗本轮 digest_per_tick
 
 # HTTP MCP（agent-accounts mcp --http）。stdio 模式（agent-accounts mcp）不用这一段
 [mcp]

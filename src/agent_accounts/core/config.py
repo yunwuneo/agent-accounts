@@ -186,7 +186,7 @@ class ReplyToolsConfig(BaseModel):
 
     enabled: bool = False  # 默认关：先用 decide --tools 试运行对比
     max_rounds: int = Field(default=4, ge=1, le=8)  # 每次决策最多调用几轮工具
-    paid: list[Literal["view_image"]] = Field(default_factory=list)
+    paid: list[Literal["view_image", "analyze_share"]] = Field(default_factory=list)
     max_paid_calls: int = Field(default=2, ge=0, le=8)
 
 

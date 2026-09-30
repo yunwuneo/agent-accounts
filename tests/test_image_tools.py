@@ -366,6 +366,6 @@ async def test_download_response_handling(
 
 def test_paid_configuration_defaults_and_validation():
     assert config.ReplyToolsConfig().paid == []
-    for invalid in ({"paid": ["analyze_share"]}, {"max_paid_calls": -1}):
+    for invalid in ({"paid": ["unknown_tool"]}, {"max_paid_calls": -1}):
         with pytest.raises(ValueError):
             config.ReplyToolsConfig(**invalid)
