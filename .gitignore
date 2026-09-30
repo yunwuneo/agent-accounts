@@ -5,6 +5,9 @@ __pycache__/
 .ruff_cache/
 dist/
 
+# macOS Finder metadata
+.DS_Store
+
 # 运行数据默认放在 ~/.agent-accounts/，这里兜底防止误把 profile、数据库、运行快照提交进仓库
 .agent-accounts/
 profiles/
