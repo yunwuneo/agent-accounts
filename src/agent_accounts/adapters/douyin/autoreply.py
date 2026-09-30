@@ -6,6 +6,7 @@
 - 首次见到的会话只记基线（handled_index = 最后一条），不回复旧消息
 - 同一会话连续多条新消息合并成一次决策
 - 真正发送需要 auto_reply = "on" 且调用方显式允许（--allow-send）；否则一律 dry_run
+- [reply_tools] enabled 时回复模型可以先调用只读工具（翻更早的消息、搜索、看分享详情、看对方关系）
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from agent_accounts.adapters.douyin import digest as ddigest
 from agent_accounts.adapters.douyin import store as dstore
@@ -23,6 +25,7 @@ from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import digests, guard, persona
 from agent_accounts.core.config import Config
 from agent_accounts.core.reply import ChatLine, ReplyError, decide
+from agent_accounts.core.reply_tools import RefBook, ReplyToolbox
 from agent_accounts.core.run import RunContext
 
 PLATFORM = "douyin"
@@ -44,10 +47,11 @@ class TickResult:
     digested: int = 0
 
 
-def _share_line(m: dstore.DouyinMessage) -> str:
+def _share_line(m: dstore.DouyinMessage, refs: RefBook | None = None) -> str:
     kind = "视频" if m.type == "video_share" else "图集"
     title = " ".join((m.share_title or "").split())[:80]
-    line = f"[分享{kind}] {title}（作者 {m.share_author or '未知'}）"
+    ref = f" {refs.share(m.aweme_id)}" if refs is not None and m.aweme_id else ""
+    line = f"[分享{kind}{ref}] {title}（作者 {m.share_author or '未知'}）"
     d = digests.get(PLATFORM, m.aweme_id) if m.aweme_id else None
     if d is None:
         return line + " —— 作品内容还没有分析"
@@ -55,12 +59,53 @@ def _share_line(m: dstore.DouyinMessage) -> str:
     return f"{line} —— 作品摘要：{d.summary} 氛围：{d.vibe} 可以聊的点：{hooks}"
 
 
-def chat_lines(conv_id: str, new_ids: set[str], limit: int) -> list[ChatLine]:
-    lines = []
-    for m in dstore.list_messages(conv_id, limit=limit):
-        content = _share_line(m) if m.aweme_id else m.preview(max_len=200)
-        lines.append(ChatLine(m.from_me, m.sent_at, content, is_new=m.msg_id in new_ids))
-    return lines
+def _line(m: dstore.DouyinMessage, new_ids: set[str], refs: RefBook | None) -> ChatLine:
+    content = _share_line(m, refs) if m.aweme_id else m.preview(max_len=200)
+    return ChatLine(m.from_me, m.sent_at, content, is_new=m.msg_id in new_ids)
+
+
+def chat_lines(
+    conv_id: str, new_ids: set[str], limit: int, refs: RefBook | None = None
+) -> list[ChatLine]:
+    return [_line(m, new_ids, refs) for m in dstore.list_messages(conv_id, limit=limit)]
+
+
+def _fmt(dt: datetime | None) -> str:
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M") if dt else "未知"
+
+
+class DouyinChatSource:
+    """回复模型工具用的本会话查询（只读本地库）。"""
+
+    platform = PLATFORM
+
+    def __init__(self, conv: dstore.DouyinConversation, refs: RefBook, oldest_index: int | None):
+        self.conv = conv
+        self.refs = refs
+        self._cursor = oldest_index  # 已经给模型看过的最早一条
+
+    def older(self, limit: int) -> list[ChatLine]:
+        if self._cursor is None:
+            return []
+        msgs = dstore.list_messages(self.conv.conv_id, limit=limit, before_index=self._cursor)
+        if msgs:
+            self._cursor = msgs[0].msg_index
+        return [_line(m, set(), self.refs) for m in msgs]
+
+    def search(self, query: str, limit: int) -> list[ChatLine]:
+        msgs = dstore.search_messages(self.conv.conv_id, query, limit=limit)
+        return [_line(m, set(), self.refs) for m in msgs]
+
+    def peer_info(self) -> dict[str, Any]:
+        n, first = dstore.message_stats(self.conv.conv_id)
+        mine = [m for m in dstore.list_messages(self.conv.conv_id, limit=200) if m.from_me]
+        return {
+            "昵称": self.conv.name or "未知",
+            "关系": "互相关注" if self.conv.is_mutual else "不是互相关注",
+            "本地记录里的消息数": n,
+            "本地记录最早一条的时间": _fmt(first),
+            "你最近几次发消息的时间": "、".join(_fmt(m.sent_at) for m in mine[-3:]) or "没有",
+        }
 
 
 def new_peer_messages(conv: dstore.DouyinConversation) -> list[dstore.DouyinMessage]:
@@ -84,6 +129,7 @@ async def _decide_and_act(
     new_msgs: list[dstore.DouyinMessage],
     mode: str,
     source: str,
+    use_tools: bool = False,
 ) -> ConvOutcome:
     now = datetime.now(UTC)
     trigger_types = [m.type for m in new_msgs]
@@ -117,14 +163,24 @@ async def _decide_and_act(
         )
         return ConvOutcome(conv.conv_id, conv.name, "blocked", reply, "；".join(pre.reasons))
 
-    # 2) 回复决策
+    # 2) 回复决策（可选：先调用只读工具）
     new_ids = {m.msg_id for m in new_msgs}
+    context = dstore.list_messages(conv.conv_id, limit=cfg.douyin.context_messages)
+    refs = RefBook() if use_tools else None
+    lines = [_line(m, new_ids, refs) for m in context]
+    toolbox = None
+    if refs is not None:
+        oldest = context[0].msg_index if context else None
+        toolbox = ReplyToolbox(
+            DouyinChatSource(conv, refs, oldest),
+            refs,
+            conv.conv_id,
+            max_rounds=cfg.reply_tools.max_rounds,
+            audit=run.audit,
+        )
     try:
         d = await decide(
-            cfg.llm.reply,
-            persona.load(),
-            chat_lines(conv.conv_id, new_ids, cfg.douyin.context_messages),
-            recent=persona.load_recent(),
+            cfg.llm.reply, persona.load(), lines, recent=persona.load_recent(), tools=toolbox
         )
     except ReplyError as e:
         run.audit("douyin.reply.error", conv_id=conv.conv_id, error=str(e))
@@ -137,6 +193,7 @@ async def _decide_and_act(
         reason=d.reason,
         confidence=d.confidence,
         model=cfg.llm.reply.model,
+        tool_calls_json=toolbox.calls_json() if toolbox else "[]",
     )
     if not d.should_reply:
         reply = dstore.save_reply(dstore.DouyinReply(**common, status="skipped"))
@@ -207,7 +264,9 @@ async def run_once(
             n = await _ensure_digests(s, cfg, run, new_msgs, budget)
             budget -= n
             result.digested += n
-            outcome = await _decide_and_act(s, cfg, run, conv, new_msgs, mode, "auto")
+            outcome = await _decide_and_act(
+                s, cfg, run, conv, new_msgs, mode, "auto", cfg.reply_tools.enabled
+            )
             if outcome.action != "error":  # 模型出错时不推进，下一轮重试
                 dstore.set_handled(conv.conv_id, max(m.msg_index for m in new_msgs))
             result.outcomes.append(outcome)
@@ -221,10 +280,19 @@ async def run_once(
 
 
 async def decide_for(
-    cfg: Config, run: RunContext, conv: dstore.DouyinConversation, last: int
+    cfg: Config,
+    run: RunContext,
+    conv: dstore.DouyinConversation,
+    last: int,
+    *,
+    tools: bool | None = None,
 ) -> ConvOutcome:
-    """试运行：把对方最近 last 条消息当作新消息做一次决策，只记录不发送，不改 handled_index。"""
+    """试运行：把对方最近 last 条消息当作新消息做一次决策，只记录不发送，不改 handled_index。
+
+    tools 为 None 时跟随 [reply_tools] enabled。
+    """
+    use_tools = cfg.reply_tools.enabled if tools is None else tools
     peer = [m for m in dstore.list_messages(conv.conv_id, limit=200) if not m.from_me][-last:]
     if not peer:
         return ConvOutcome(conv.conv_id, conv.name, "no_new", None, "没有对方的消息")
-    return await _decide_and_act(None, cfg, run, conv, peer, "dry_run", "decide")
+    return await _decide_and_act(None, cfg, run, conv, peer, "dry_run", "decide", use_tools)

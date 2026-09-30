@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlmodel import Field, SQLModel, col, select
+from sqlmodel import Field, SQLModel, col, func, or_, select
 
 from agent_accounts.adapters.xiaohongshu import im
 from agent_accounts.core import store
@@ -218,11 +218,38 @@ def find_conversation(query: str) -> XhsConversation | None:
     return rows[0] if len(rows) == 1 else None
 
 
-def list_messages(peer_id: str, *, limit: int = 30) -> list[XhsMessage]:
+def list_messages(
+    peer_id: str, *, limit: int = 30, before_store_id: int | None = None
+) -> list[XhsMessage]:
+    """会话里最近的 limit 条（按先后排列）；给了 before_store_id 时只取更早的。"""
     with store.session() as s:
         q = select(XhsMessage).where(XhsMessage.peer_id == peer_id)
+        if before_store_id is not None:
+            q = q.where(col(XhsMessage.store_id) < before_store_id)
         rows = s.exec(q.order_by(col(XhsMessage.store_id).desc()).limit(limit)).all()
     return list(reversed(rows))
+
+
+def search_messages(peer_id: str, query: str, *, limit: int = 10) -> list[XhsMessage]:
+    """会话里文字或笔记标题包含 query 的最近 limit 条（按先后排列）。"""
+    with store.session() as s:
+        q = select(XhsMessage).where(
+            XhsMessage.peer_id == peer_id,
+            or_(col(XhsMessage.text).contains(query), col(XhsMessage.note_title).contains(query)),
+        )
+        rows = s.exec(q.order_by(col(XhsMessage.store_id).desc()).limit(limit)).all()
+    return list(reversed(rows))
+
+
+def message_stats(peer_id: str) -> tuple[int, datetime | None]:
+    """本地记录里这个会话的消息数和最早一条的时间。"""
+    with store.session() as s:
+        n, first = s.exec(
+            select(func.count(), func.min(XhsMessage.sent_at)).where(XhsMessage.peer_id == peer_id)
+        ).one()
+    if first is not None and first.tzinfo is None:
+        first = first.replace(tzinfo=UTC)
+    return n, first
 
 
 def mark_opened(peer_id: str) -> None:
@@ -257,6 +284,7 @@ class XhsReply(SQLModel, table=True):
     reason: str = ""
     confidence: float | None = None
     guard_reasons: str = "[]"
+    tool_calls_json: str = "[]"  # 回复模型调用过的工具（只有工具名、参数摘要、结果字数）
     # dry_run / blocked / skipped / sent / failed / partial / deferred（笔记还没分析，下一轮再说）
     status: str
     model: str | None = None

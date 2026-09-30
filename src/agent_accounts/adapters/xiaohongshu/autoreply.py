@@ -10,6 +10,7 @@
   不在没看笔记的情况下回复；分析失败则照常决策，并告诉模型这篇没看成
 - 平台自动发的「已相互关注」开场语和系统提示按 system 处理，只有它们时不回复
 - 真正发送需要 [xiaohongshu] auto_reply = "on" 且调用方显式允许（--allow-send）；否则一律 dry_run
+- [reply_tools] enabled 时回复模型可以先调用只读工具（翻更早的消息、搜索、看笔记详情、看对方关系）
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from agent_accounts.adapters.xiaohongshu import PLATFORM
 from agent_accounts.adapters.xiaohongshu import digest as xdigest
@@ -27,6 +29,7 @@ from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import digests, guard, persona
 from agent_accounts.core.config import Config
 from agent_accounts.core.reply import ChatLine, ReplyError, decide, split_messages
+from agent_accounts.core.reply_tools import RefBook, ReplyToolbox
 from agent_accounts.core.run import RunContext
 
 _GUARD_TYPES = {"system": "system", "other": "unsupported"}
@@ -65,10 +68,11 @@ def eligible(conv: xstore.XhsConversation) -> bool:
 # ---- 聊天记录渲染 ----
 
 
-def _note_line(m: xstore.XhsMessage, failed: set[str]) -> str:
+def _note_line(m: xstore.XhsMessage, failed: set[str], refs: RefBook | None = None) -> str:
     kind = "视频笔记" if m.note_type == "video" else "图文笔记"
     title = " ".join((m.note_title or "").split())[:80]
-    line = f"[分享{kind}] {title}（作者 {m.note_author or '未知'}）"
+    ref = f" {refs.share(m.note_id)}" if refs is not None and m.note_id else ""
+    line = f"[分享{kind}{ref}] {title}（作者 {m.note_author or '未知'}）"
     d = digests.get(PLATFORM, m.note_id) if m.note_id else None
     if d is None:
         why = "内容分析失败，没看成" if m.note_id in failed else "内容还没有分析"
@@ -78,23 +82,70 @@ def _note_line(m: xstore.XhsMessage, failed: set[str]) -> str:
     return f"{line}{unavailable} —— 笔记摘要：{d.summary} 氛围：{d.vibe} 可以聊的点：{hooks}"
 
 
-def _content(m: xstore.XhsMessage, failed: set[str]) -> str:
+def _content(m: xstore.XhsMessage, failed: set[str], refs: RefBook | None = None) -> str:
     if m.revoked:
         return "[已撤回]"
     if m.type == "note":
-        return _note_line(m, failed)
+        return _note_line(m, failed, refs)
     if m.type == "image":
         return "[图片]（图片内容没有分析）"
     return m.preview(max_len=200)
 
 
+def _line(
+    m: xstore.XhsMessage, new_ids: set[str], failed: set[str], refs: RefBook | None
+) -> ChatLine:
+    return ChatLine(m.from_me, m.sent_at, _content(m, failed, refs), is_new=m.msg_id in new_ids)
+
+
 def chat_lines(
-    peer_id: str, new_ids: set[str], limit: int, failed: set[str] = frozenset()
+    peer_id: str,
+    new_ids: set[str],
+    limit: int,
+    failed: set[str] = frozenset(),
+    refs: RefBook | None = None,
 ) -> list[ChatLine]:
-    return [
-        ChatLine(m.from_me, m.sent_at, _content(m, failed), is_new=m.msg_id in new_ids)
-        for m in xstore.list_messages(peer_id, limit=limit)
-    ]
+    return [_line(m, new_ids, failed, refs) for m in xstore.list_messages(peer_id, limit=limit)]
+
+
+def _fmt(dt: datetime | None) -> str:
+    if dt is None:
+        return "未知"
+    return (dt if dt.tzinfo else dt.replace(tzinfo=UTC)).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+class XhsChatSource:
+    """回复模型工具用的本会话查询（只读本地库）。"""
+
+    platform = PLATFORM
+
+    def __init__(self, conv: xstore.XhsConversation, refs: RefBook, oldest_store_id: int | None):
+        self.conv = conv
+        self.refs = refs
+        self._cursor = oldest_store_id  # 已经给模型看过的最早一条
+
+    def older(self, limit: int) -> list[ChatLine]:
+        if self._cursor is None:
+            return []
+        msgs = xstore.list_messages(self.conv.peer_id, limit=limit, before_store_id=self._cursor)
+        if msgs:
+            self._cursor = msgs[0].store_id
+        return [_line(m, set(), set(), self.refs) for m in msgs]
+
+    def search(self, query: str, limit: int) -> list[ChatLine]:
+        msgs = xstore.search_messages(self.conv.peer_id, query, limit=limit)
+        return [_line(m, set(), set(), self.refs) for m in msgs]
+
+    def peer_info(self) -> dict[str, Any]:
+        n, first = xstore.message_stats(self.conv.peer_id)
+        mine = [m for m in xstore.list_messages(self.conv.peer_id, limit=200) if m.from_me]
+        return {
+            "昵称": self.conv.name or "未知",
+            "关系": "互相关注" if self.conv.followed else "未确认互相关注",
+            "本地记录里的消息数": n,
+            "本地记录最早一条的时间": _fmt(first),
+            "你最近几次发消息的时间": "、".join(_fmt(m.sent_at) for m in mine[-3:]) or "没有",
+        }
 
 
 def new_peer_messages(conv: xstore.XhsConversation) -> list[xstore.XhsMessage]:
@@ -212,6 +263,7 @@ async def _decide_and_act(
     mode: str,
     source: str,
     failed: set[str] = frozenset(),
+    use_tools: bool = False,
 ) -> ConvOutcome:
     now = datetime.now(UTC)
     trigger_types = [m.type for m in new_msgs]
@@ -236,16 +288,30 @@ async def _decide_and_act(
         reply = xstore.save_reply(xstore.XhsReply(**base, status="blocked", guard_reasons=reasons))
         return ConvOutcome(conv.peer_id, conv.name, "blocked", reply, "；".join(pre.reasons))
 
-    # 2) 回复决策：上下文至少包含全部新消息
+    # 2) 回复决策：上下文至少包含全部新消息（可选：先调用只读工具）
     new_ids = {m.msg_id for m in new_msgs}
     limit = max(cfg.xiaohongshu.context_messages, len(new_msgs) + 10)
+    context = xstore.list_messages(conv.peer_id, limit=limit)
+    refs = RefBook() if use_tools else None
+    lines = [_line(m, new_ids, failed, refs) for m in context]
+    toolbox = None
+    if refs is not None:
+        oldest = context[0].store_id if context else None
+        toolbox = ReplyToolbox(
+            XhsChatSource(conv, refs, oldest),
+            refs,
+            conv.peer_id,
+            max_rounds=cfg.reply_tools.max_rounds,
+            audit=run.audit,
+        )
     try:
         d = await decide(
             cfg.llm.reply,
             persona.load(),
-            chat_lines(conv.peer_id, new_ids, limit, failed),
+            lines,
             recent=persona.load_recent(),
             platform="xiaohongshu",
+            tools=toolbox,
         )
     except ReplyError as e:
         run.audit("xiaohongshu.reply.error", peer=conv.peer_id, error=str(e))
@@ -258,6 +324,7 @@ async def _decide_and_act(
         reason=d.reason,
         confidence=d.confidence,
         model=cfg.llm.reply.model,
+        tool_calls_json=toolbox.calls_json() if toolbox else "[]",
     )
     if not d.should_reply:
         reply = xstore.save_reply(xstore.XhsReply(**common, status="skipped"))
@@ -331,7 +398,9 @@ async def run_once(
                 )
                 continue
 
-            outcome = await _decide_and_act(s, cfg, run, conv, new_msgs, mode, "auto", failed)
+            outcome = await _decide_and_act(
+                s, cfg, run, conv, new_msgs, mode, "auto", failed, cfg.reply_tools.enabled
+            )
             if outcome.action != "error":  # 模型出错时不推进，下一轮重试
                 xstore.set_handled(conv.peer_id, max(m.store_id for m in new_msgs))
             result.outcomes.append(outcome)
@@ -346,11 +415,22 @@ async def run_once(
 
 
 async def decide_for(
-    cfg: Config, run: RunContext, conv: xstore.XhsConversation, last: int
+    cfg: Config,
+    run: RunContext,
+    conv: xstore.XhsConversation,
+    last: int,
+    *,
+    tools: bool | None = None,
 ) -> ConvOutcome:
-    """试运行：把对方最近 last 条消息当作新消息做一次决策，只记录不发送，不改 handled_store_id。"""
+    """试运行：把对方最近 last 条消息当作新消息做一次决策，只记录不发送，不改 handled_store_id。
+
+    tools 为 None 时跟随 [reply_tools] enabled。
+    """
+    use_tools = cfg.reply_tools.enabled if tools is None else tools
     msgs = xstore.list_messages(conv.peer_id, limit=500)
     peer = [m for m in msgs if not m.from_me][-last:]
     if not peer:
         return ConvOutcome(conv.peer_id, conv.name, "no_new", None, "没有对方的消息")
-    return await _decide_and_act(None, cfg, run, conv, peer, "dry_run", "decide")
+    return await _decide_and_act(
+        None, cfg, run, conv, peer, "dry_run", "decide", use_tools=use_tools
+    )

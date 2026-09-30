@@ -175,6 +175,19 @@ class GuardConfig(BaseModel):
     extra_block_words: list[str] = Field(default_factory=list)
 
 
+class ReplyToolsConfig(BaseModel):
+    """回复模型的工具调用（Notion「回复模型工具调用：设计方案」）。
+
+    打开后回复模型在一次决策里可以按需调用只读工具（翻更早的消息、搜索、看分享的完整分析、
+    看对方关系），查完再给出决定。发送、护栏不受影响。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False  # 默认关：先用 decide --tools 试运行对比
+    max_rounds: int = Field(default=4, ge=1, le=8)  # 每次决策最多调用几轮工具
+
+
 class AlertsConfig(BaseModel):
     """告警 webhook：POST JSON {platform, level, message, run_id, time, text}。
 
@@ -287,6 +300,7 @@ class Config(BaseModel):
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     guard: GuardConfig = Field(default_factory=GuardConfig)
+    reply_tools: ReplyToolsConfig = Field(default_factory=ReplyToolsConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
 

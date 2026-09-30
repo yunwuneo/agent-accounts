@@ -460,6 +460,13 @@ def _joined(text: str) -> str:
     return " ⏎ ".join(split_messages(text))
 
 
+def _print_tools(r) -> None:
+    from agent_accounts.core.reply_tools import describe_calls
+
+    for line in describe_calls(r.tool_calls_json if r else None):
+        typer.echo(f"    工具：{line}")
+
+
 def _print_outcome(o) -> None:
     typer.echo(f"{_ACTION.get(o.action, o.action)}  {o.name or o.conv_id}")
     r = o.reply
@@ -468,6 +475,7 @@ def _print_outcome(o) -> None:
     if r and r.reason:
         conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
         typer.echo(f"    理由：{r.reason}{conf}")
+    _print_tools(r)
     if o.action in ("blocked", "error", "failed", "partial") and o.detail:
         typer.echo(f"    原因：{o.detail}")
 
@@ -524,6 +532,11 @@ def run(
 def decide(
     conv: str = typer.Argument(..., help="conv_id 或对方昵称"),
     last: int = typer.Option(2, help="把对方最近几条消息当作新消息"),
+    tools: bool | None = typer.Option(
+        None,
+        "--tools/--no-tools",
+        help="回复模型可否调用只读工具（默认跟随配置 reply_tools.enabled）",
+    ),
 ) -> None:
     """试运行一次回复决策（只记录，不发送，不打开浏览器）。"""
     from agent_accounts.adapters.douyin import store as dstore
@@ -536,7 +549,7 @@ def decide(
 
     async def main():
         with start_run(PLATFORM, "decide") as run_ctx:
-            return await decide_for(config.load(), run_ctx, row, last)
+            return await decide_for(config.load(), run_ctx, row, last, tools=tools)
 
     _print_outcome(_run(main()))
 
@@ -564,3 +577,4 @@ def replies(limit: int = typer.Option(20, help="显示最近多少条")) -> None
         reasons = json.loads(r.guard_reasons or "[]")
         if reasons:
             typer.echo(f"    护栏：{'；'.join(reasons)}")
+        _print_tools(r)

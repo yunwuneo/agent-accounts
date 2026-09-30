@@ -215,6 +215,9 @@ def config_show() -> None:
         f"[media（看视频）] 约每 {m.frame_interval_s:g} 秒一帧，最多 {m.max_frames} 帧；"
         f"语音最多转写 {m.max_video_seconds} 秒，每段 {m.transcribe_segment_s} 秒"
     )
+    t = cfg.reply_tools
+    state = "开" if t.enabled else "关"
+    typer.echo(f"[reply_tools（回复模型工具调用）] {state}，每次决策最多 {t.max_rounds} 轮")
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
     typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 

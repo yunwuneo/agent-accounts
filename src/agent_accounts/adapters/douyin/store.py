@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlmodel import Field, SQLModel, col, func, select
+from sqlmodel import Field, SQLModel, col, func, or_, select
 
 from agent_accounts.adapters.douyin import im
 from agent_accounts.core import store
@@ -216,14 +216,46 @@ def recent_messages(*, limit: int = 30) -> list[DouyinMessage]:
 
 
 def list_messages(
-    conv_id: str, *, limit: int = 30, since: datetime | None = None
+    conv_id: str,
+    *,
+    limit: int = 30,
+    since: datetime | None = None,
+    before_index: int | None = None,
 ) -> list[DouyinMessage]:
+    """会话里最近的 limit 条（按先后排列）；给了 before_index 时只取更早的。"""
     with store.session() as s:
         q = select(DouyinMessage).where(DouyinMessage.conv_id == conv_id)
         if since:
             q = q.where(col(DouyinMessage.sent_at) >= _utc(since))
+        if before_index is not None:
+            q = q.where(col(DouyinMessage.msg_index) < before_index)
         rows = s.exec(q.order_by(col(DouyinMessage.msg_index).desc()).limit(limit)).all()
     return list(reversed(rows))
+
+
+def search_messages(conv_id: str, query: str, *, limit: int = 10) -> list[DouyinMessage]:
+    """会话里文字或分享标题包含 query 的最近 limit 条（按先后排列）。"""
+    with store.session() as s:
+        q = select(DouyinMessage).where(
+            DouyinMessage.conv_id == conv_id,
+            or_(
+                col(DouyinMessage.text).contains(query),
+                col(DouyinMessage.share_title).contains(query),
+            ),
+        )
+        rows = s.exec(q.order_by(col(DouyinMessage.msg_index).desc()).limit(limit)).all()
+    return list(reversed(rows))
+
+
+def message_stats(conv_id: str) -> tuple[int, datetime | None]:
+    """本地记录里这个会话的消息数和最早一条的时间。"""
+    with store.session() as s:
+        n, first = s.exec(
+            select(func.count(), func.min(DouyinMessage.sent_at)).where(
+                DouyinMessage.conv_id == conv_id
+            )
+        ).one()
+    return n, _utc(first)
 
 
 class DouyinReply(SQLModel, table=True):
@@ -241,6 +273,7 @@ class DouyinReply(SQLModel, table=True):
     reason: str = ""
     confidence: float | None = None
     guard_reasons: str = "[]"  # 护栏拦截原因
+    tool_calls_json: str = "[]"  # 回复模型调用过的工具（只有工具名、参数摘要、结果字数）
     # dry_run：只生成不发送；blocked：被护栏拦下；skipped：模型决定不回；sent；failed；
     # partial：多条消息只发出了一部分
     status: str
