@@ -1,4 +1,4 @@
-"""回复模型的只读工具（Notion「回复模型工具调用：设计方案」S1：只查本地库）。
+"""回复模型工具（Notion「回复模型工具调用：设计方案」S1 本地查询 + S2 可选图片理解）。
 
 回复模型在一次决策里可以按需调用这些工具，查完再给出 ReplyDecision：
 
@@ -6,10 +6,11 @@
 - ``search_messages``：在本会话的本地记录里按关键词找消息
 - ``get_share_detail``：某条分享（S1、S2…）的完整分析结果
 - ``get_peer_info``：对方的昵称、关注关系、聊天时长等
+- ``view_image``：显式启用后，通过平台的 ImageViewer 查缓存或调用理解模型
 
 约束：
 - 会话由代码绑定，工具参数里没有会话 ID；分享只能用本次决策里出现过的编号引用
-- 不开浏览器、不调其他模型、不发送；平台相关的查询由适配器实现 ``ChatSource``
+- 本地查询由适配器实现 ``ChatSource``；图片工具复用已有浏览器，受付费预算限制，不发送
 - 参数不对、编号不存在时作为错误结果交回模型；其他异常不接住，直接中止这次决策
 - 审计只记工具名、参数摘要、结果字数和耗时，不记内容
 """
@@ -39,9 +40,22 @@ class ToolError(Exception):
 class RefBook:
     """分享的短编号（S1、S2…）↔ 作品 / 笔记 ID。只有出现在本次决策里的分享才有编号。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, images_enabled: bool = False) -> None:
+        self.images_enabled = images_enabled
         self._by_item: dict[str, str] = {}
         self._by_ref: dict[str, str] = {}
+        self._images: dict[str, str] = {}
+
+    def image(self, message_id: str) -> str:
+        if message_id not in self._images:
+            self._images[message_id] = f"I{len(self._images) + 1}"
+        return self._images[message_id]
+
+    def resolve_image(self, ref: str) -> str:
+        for message_id, known in self._images.items():
+            if known == ref.strip().upper():
+                return message_id
+        raise ToolError("图片编号不存在，请使用聊天记录中的 I 编号")
 
     def share(self, item_id: str) -> str:
         if item_id not in self._by_item:
@@ -85,11 +99,14 @@ class ToolCall:
     ok: bool
     chars: int
     ms: int
+    paid: bool = False  # 是否已经开始调用理解模型（失败也算）
+    cached: bool = False
 
     def describe(self) -> str:
         args = ", ".join(f"{k}={v}" for k, v in self.args.items())
         result = f"{self.chars} 字" if self.ok else "出错"
-        return f"{self.name}({args}) → {result}"
+        extra = "（缓存）" if self.cached else ("（已调用理解模型）" if self.paid else "")
+        return f"{self.name}({args}) → {result}{extra}"
 
 
 def describe_calls(tool_calls_json: str | None) -> list[str]:
@@ -215,6 +232,25 @@ def _definitions() -> list[dict[str, Any]]:
 
 
 @dataclass
+class MediaBudget:
+    """本轮剩余媒体处理次数，由笔记分析和图片工具共用；失败不退还。"""
+
+    remaining: int
+
+
+class ImageViewer(Protocol):
+    available: bool
+
+    def cached(self, message_id: str) -> str | None:
+        """先核对会话归属及撤回状态，再查缓存。"""
+        ...
+
+    async def analyze(self, message_id: str, on_model: Callable[[], None]) -> str:
+        """未缓存图片的下载及理解；调用模型前通知审计，不接住人工介入异常。"""
+        ...
+
+
+@dataclass
 class ReplyToolbox:
     """一次回复决策用的工具箱：绑定一个会话，记录调用过程。"""
 
@@ -224,9 +260,29 @@ class ReplyToolbox:
     max_rounds: int = 4
     audit: Callable[..., None] | None = None
     calls: list[ToolCall] = field(default_factory=list)
+    image_viewer: ImageViewer | None = None  # 只有明确启用付费工具的平台才提供
+    max_paid_calls: int = 2
+    media_budget: MediaBudget | None = None
+    _paid_attempts: int = field(default=0, init=False)
 
     def definitions(self, *, strict: bool) -> list[dict[str, Any]]:
         defs = _definitions()
+        if self.image_viewer is not None:
+            defs.append(
+                {
+                    "name": "view_image",
+                    "description": (
+                        "查看对方发来的私信图片（I 编号），返回画面描述和图中文字。"
+                        "优先读缓存，未缓存时消耗媒体预算；只在需要时调用。"
+                    ),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"ref": {"type": "string", "description": "图片编号，如 I1"}},
+                        "required": ["ref"],
+                        "additionalProperties": False,
+                    },
+                }
+            )
         if strict:  # 代理不支持结构化输出时一般也不认 strict，跟着 structured_output 走
             for d in defs:
                 d["strict"] = True
@@ -236,7 +292,72 @@ class ReplyToolbox:
         return json.dumps([asdict(c) for c in self.calls], ensure_ascii=False)
 
     async def execute(self, uses: list[ToolUse]) -> list[ToolOutput]:
-        return [self._run(use) for use in uses]
+        outputs = []
+        for use in uses:
+            if use.name == "view_image" and self.image_viewer is not None:
+                outputs.append(await self._run_image(use))
+            else:
+                outputs.append(self._run(use))
+        return outputs
+
+    async def _run_image(self, use: ToolUse) -> ToolOutput:
+        start = time.monotonic()
+        paid = cached = False
+        summary: dict[str, Any] = {}
+
+        def on_model() -> None:
+            nonlocal paid
+            paid = True
+
+        try:
+            ref = _ref(use.input).strip().upper()
+            message_id = self.refs.resolve_image(ref)
+            summary = {"ref": ref}
+            viewer = self.image_viewer
+            assert viewer is not None
+            text = viewer.cached(message_id)
+            if text is not None:
+                cached = True
+            else:
+                if not viewer.available:
+                    raise ToolError("当前没有浏览器，未缓存图片暂不可用，请根据已有信息决定")
+                if (
+                    self._paid_attempts >= self.max_paid_calls
+                    or self.media_budget is None
+                    or self.media_budget.remaining <= 0
+                ):
+                    raise ToolError("图片理解预算已用完，请根据已有信息决定")
+                self._paid_attempts += 1
+                self.media_budget.remaining -= 1
+                text = await viewer.analyze(message_id, on_model)
+            out = ToolOutput(_clip(text, MAX_RESULT_CHARS))
+        except ToolError as e:
+            out = ToolOutput(str(e), is_error=True)
+        except BaseException:
+            self._record(
+                ToolCall(
+                    use.name,
+                    summary,
+                    False,
+                    0,
+                    int((time.monotonic() - start) * 1000),
+                    paid,
+                    cached,
+                )
+            )
+            raise
+        self._record(
+            ToolCall(
+                use.name,
+                summary,
+                not out.is_error,
+                len(out.content),
+                int((time.monotonic() - start) * 1000),
+                paid,
+                cached,
+            )
+        )
+        return out
 
     def _run(self, use: ToolUse) -> ToolOutput:
         start = time.monotonic()
@@ -253,6 +374,10 @@ class ReplyToolbox:
             chars=len(out.content),
             ms=int((time.monotonic() - start) * 1000),
         )
+        self._record(call)
+        return out
+
+    def _record(self, call: ToolCall) -> None:
         self.calls.append(call)
         if self.audit:
             self.audit(
@@ -263,8 +388,9 @@ class ReplyToolbox:
                 ok=call.ok,
                 chars=call.chars,
                 ms=call.ms,
+                paid=call.paid,
+                cached=call.cached,
             )
-        return out
 
     def _dispatch(self, name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         if name == "get_older_messages":

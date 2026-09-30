@@ -23,13 +23,14 @@ from typing import Any
 from agent_accounts.adapters.xiaohongshu import PLATFORM
 from agent_accounts.adapters.xiaohongshu import digest as xdigest
 from agent_accounts.adapters.xiaohongshu import store as xstore
+from agent_accounts.adapters.xiaohongshu.reply_tools import XhsImageViewer
 from agent_accounts.adapters.xiaohongshu.sender import SendError, open_conversation, send_messages
 from agent_accounts.adapters.xiaohongshu.sync import sync_in_session
 from agent_accounts.browser.session import BrowserSession
 from agent_accounts.core import digests, guard, persona
 from agent_accounts.core.config import Config
 from agent_accounts.core.reply import ChatLine, ReplyError, decide, split_messages
-from agent_accounts.core.reply_tools import RefBook, ReplyToolbox
+from agent_accounts.core.reply_tools import MediaBudget, RefBook, ReplyToolbox
 from agent_accounts.core.run import RunContext
 
 _GUARD_TYPES = {"system": "system", "other": "unsupported"}
@@ -51,6 +52,7 @@ class TickResult:
     outcomes: list[ConvOutcome] = field(default_factory=list)
     digested: int = 0
     opened: int = 0
+    image_attempts: int = 0
 
 
 def effective_mode(cfg: Config, *, dry_run: bool, allow_send: bool) -> str:
@@ -88,6 +90,8 @@ def _content(m: xstore.XhsMessage, failed: set[str], refs: RefBook | None = None
     if m.type == "note":
         return _note_line(m, failed, refs)
     if m.type == "image":
+        if refs is not None and refs.images_enabled and not m.from_me:
+            return f"[图片 {refs.image(m.msg_id)}]（可用 view_image 查看）"
         return "[图片]（图片内容没有分析）"
     return m.preview(max_len=200)
 
@@ -264,6 +268,7 @@ async def _decide_and_act(
     source: str,
     failed: set[str] = frozenset(),
     use_tools: bool = False,
+    media_budget: MediaBudget | None = None,
 ) -> ConvOutcome:
     now = datetime.now(UTC)
     trigger_types = [m.type for m in new_msgs]
@@ -292,7 +297,8 @@ async def _decide_and_act(
     new_ids = {m.msg_id for m in new_msgs}
     limit = max(cfg.xiaohongshu.context_messages, len(new_msgs) + 10)
     context = xstore.list_messages(conv.peer_id, limit=limit)
-    refs = RefBook() if use_tools else None
+    images_enabled = "view_image" in cfg.reply_tools.paid
+    refs = RefBook(images_enabled=images_enabled) if use_tools else None
     lines = [_line(m, new_ids, failed, refs) for m in context]
     toolbox = None
     if refs is not None:
@@ -303,6 +309,9 @@ async def _decide_and_act(
             conv.peer_id,
             max_rounds=cfg.reply_tools.max_rounds,
             audit=run.audit,
+            image_viewer=XhsImageViewer(cfg, conv.peer_id, s) if images_enabled else None,
+            max_paid_calls=cfg.reply_tools.max_paid_calls,
+            media_budget=media_budget,
         )
     try:
         d = await decide(
@@ -365,7 +374,7 @@ async def run_once(
     async with BrowserSession(PLATFORM, cfg.browser, headless=False) as s:
         synced = await sync_in_session(s, run, max_open=cfg.xiaohongshu.max_open)
         result.opened = len(synced.opened)
-        budget = cfg.xiaohongshu.digest_per_tick
+        budget = MediaBudget(cfg.xiaohongshu.digest_per_tick)
         for conv in xstore.list_conversations():
             if not eligible(conv):
                 continue
@@ -379,12 +388,12 @@ async def run_once(
                 continue
 
             missing = _missing_notes(new_msgs)
-            todo, left = missing[: max(budget, 0)], missing[max(budget, 0) :]
+            todo, left = missing[: max(budget.remaining, 0)], missing[max(budget.remaining, 0) :]
             failed: set[str] = set()
             if todo:
                 outcomes = await xdigest.digest_in_session(s, cfg, run, todo)
                 failed = {o.note_id for o in outcomes if o.error}
-                budget -= len(todo)
+                budget.remaining -= len(todo)
                 result.digested += len(todo)
             if left:  # 这一轮分析不完：整个会话留到下一轮，不在没看笔记的情况下回复
                 result.outcomes.append(
@@ -398,9 +407,20 @@ async def run_once(
                 )
                 continue
 
+            before_images = budget.remaining
             outcome = await _decide_and_act(
-                s, cfg, run, conv, new_msgs, mode, "auto", failed, cfg.reply_tools.enabled
+                s,
+                cfg,
+                run,
+                conv,
+                new_msgs,
+                mode,
+                "auto",
+                failed,
+                cfg.reply_tools.enabled,
+                media_budget=budget,
             )
+            result.image_attempts += before_images - budget.remaining
             if outcome.action != "error":  # 模型出错时不推进，下一轮重试
                 xstore.set_handled(conv.peer_id, max(m.store_id for m in new_msgs))
             result.outcomes.append(outcome)
@@ -410,6 +430,7 @@ async def run_once(
         opened=result.opened,
         outcomes=[{"peer": o.peer_id, "action": o.action} for o in result.outcomes],
         digested=result.digested,
+        image_attempts=result.image_attempts,
     )
     return result
 

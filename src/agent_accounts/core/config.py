@@ -179,13 +179,15 @@ class ReplyToolsConfig(BaseModel):
     """回复模型的工具调用（Notion「回复模型工具调用：设计方案」）。
 
     打开后回复模型在一次决策里可以按需调用只读工具（翻更早的消息、搜索、看分享的完整分析、
-    看对方关系），查完再给出决定。发送、护栏不受影响。
+    看对方关系），查完再给出决定。paid 可单独启用小红书图片理解；默认不启用付费工具。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False  # 默认关：先用 decide --tools 试运行对比
     max_rounds: int = Field(default=4, ge=1, le=8)  # 每次决策最多调用几轮工具
+    paid: list[Literal["view_image"]] = Field(default_factory=list)
+    max_paid_calls: int = Field(default=2, ge=0, le=8)
 
 
 class AlertsConfig(BaseModel):

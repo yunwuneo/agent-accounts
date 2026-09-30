@@ -218,6 +218,7 @@ def config_show() -> None:
     t = cfg.reply_tools
     state = "开" if t.enabled else "关"
     typer.echo(f"[reply_tools（回复模型工具调用）] {state}，每次决策最多 {t.max_rounds} 轮")
+    typer.echo(f"  付费工具：{', '.join(t.paid) or '无'}，每次决策最多 {t.max_paid_calls} 次")
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
     typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 

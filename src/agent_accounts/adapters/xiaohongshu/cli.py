@@ -386,7 +386,7 @@ def run(
         stamp = datetime.now().strftime("%H:%M:%S")
         typer.secho(
             f"[{stamp}] 模式：{result.mode}，点开会话 {result.opened} 个，"
-            f"分析笔记 {result.digested} 篇",
+            f"分析笔记 {result.digested} 篇，尝试理解私信图片 {result.image_attempts} 张",
             bold=True,
         )
         for o in result.outcomes:

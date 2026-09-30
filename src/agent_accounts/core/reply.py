@@ -165,6 +165,11 @@ async def decide(
     if tools is None:
         decision = await llm.call_json(cfg, **common)
     else:
+        if tools.image_viewer is not None:
+            common["system"] += (
+                "\n- 图片后的 I1、I2 是图片编号，可用 view_image 查询；缓存之外的图片理解有预算，"
+                "工具不可用或失败时不要编造图片内容。"
+            )
         decision = await llm.call_json_with_tools(
             cfg,
             **common,
