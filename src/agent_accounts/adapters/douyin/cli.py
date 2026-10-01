@@ -451,6 +451,7 @@ _ACTION = {
     "partial": "⚠️ 只发出一部分",
     "error": "⚠️ 出错",
     "no_new": "（没有可处理的消息）",
+    "deferred": "⏳ 新分享尚未分析完成，暂缓回复",
 }
 
 
@@ -458,6 +459,13 @@ def _joined(text: str) -> str:
     from agent_accounts.core.reply import split_messages
 
     return " ⏎ ".join(split_messages(text))
+
+
+def _print_tools(r) -> None:
+    from agent_accounts.core.reply_tools import describe_calls
+
+    for line in describe_calls(r.tool_calls_json if r else None):
+        typer.echo(f"    工具：{line}")
 
 
 def _print_outcome(o) -> None:
@@ -468,7 +476,8 @@ def _print_outcome(o) -> None:
     if r and r.reason:
         conf = f"（把握 {r.confidence:.2f}）" if r.confidence is not None else ""
         typer.echo(f"    理由：{r.reason}{conf}")
-    if o.action in ("blocked", "error", "failed", "partial") and o.detail:
+    _print_tools(r)
+    if o.action in ("blocked", "error", "failed", "partial", "deferred") and o.detail:
         typer.echo(f"    原因：{o.detail}")
 
 
@@ -498,7 +507,11 @@ def run(
         with start_run(PLATFORM, "run") as run_ctx:
             result = await run_once(cfg, run_ctx, dry_run=dry_run, allow_send=allow_send)
         stamp = datetime.now().strftime("%H:%M:%S")
-        typer.secho(f"[{stamp}] 模式：{result.mode}，分析作品 {result.digested} 个", bold=True)
+        typer.secho(
+            f"[{stamp}] 模式：{result.mode}，分析作品 {result.digested} 个，"
+            f"工具补分析分享 {result.share_attempts} 个",
+            bold=True,
+        )
         for o in result.outcomes:
             _print_outcome(o)
         if not result.outcomes:
@@ -524,6 +537,11 @@ def run(
 def decide(
     conv: str = typer.Argument(..., help="conv_id 或对方昵称"),
     last: int = typer.Option(2, help="把对方最近几条消息当作新消息"),
+    tools: bool | None = typer.Option(
+        None,
+        "--tools/--no-tools",
+        help="回复模型可否调用只读工具（默认跟随配置 reply_tools.enabled）",
+    ),
 ) -> None:
     """试运行一次回复决策（只记录，不发送，不打开浏览器）。"""
     from agent_accounts.adapters.douyin import store as dstore
@@ -536,7 +554,7 @@ def decide(
 
     async def main():
         with start_run(PLATFORM, "decide") as run_ctx:
-            return await decide_for(config.load(), run_ctx, row, last)
+            return await decide_for(config.load(), run_ctx, row, last, tools=tools)
 
     _print_outcome(_run(main()))
 
@@ -564,3 +582,4 @@ def replies(limit: int = typer.Option(20, help="显示最近多少条")) -> None
         reasons = json.loads(r.guard_reasons or "[]")
         if reasons:
             typer.echo(f"    护栏：{'；'.join(reasons)}")
+        _print_tools(r)

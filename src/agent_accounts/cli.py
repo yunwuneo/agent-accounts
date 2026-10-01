@@ -193,12 +193,12 @@ def config_show() -> None:
         typer.secho(str(e), fg="red", err=True)
         raise typer.Exit(1) from None
     path = paths.config_path()
-    typer.echo(f"自动回复：douyin.auto_reply = {cfg.douyin.auto_reply}")
-    d = cfg.douyin
-    typer.echo(
-        f"[douyin 节奏] 每 {d.interval_min_s}–{d.interval_max_s} 秒一轮；"
-        f"休息时段 {', '.join(d.quiet_hours) or '无'}"
-    )
+    for name, d in (("douyin", cfg.douyin), ("xiaohongshu", cfg.xiaohongshu)):
+        typer.echo(f"自动回复：{name}.auto_reply = {d.auto_reply}")
+        typer.echo(
+            f"[{name} 节奏] 每 {d.interval_min_s}–{d.interval_max_s} 秒一轮；"
+            f"休息时段 {', '.join(d.quiet_hours) or '无'}"
+        )
     typer.echo(f"配置文件：{path}{'' if path.exists() else '（不存在，使用默认值）'}")
     sections = {
         "llm.understand（媒体理解）": cfg.llm.understand,
@@ -215,6 +215,10 @@ def config_show() -> None:
         f"[media（看视频）] 约每 {m.frame_interval_s:g} 秒一帧，最多 {m.max_frames} 帧；"
         f"语音最多转写 {m.max_video_seconds} 秒，每段 {m.transcribe_segment_s} 秒"
     )
+    t = cfg.reply_tools
+    state = "开" if t.enabled else "关"
+    typer.echo(f"[reply_tools（回复模型工具调用）] {state}，每次决策最多 {t.max_rounds} 轮")
+    typer.echo(f"  付费工具：{', '.join(t.paid) or '无'}，每次决策最多 {t.max_paid_calls} 次")
     typer.echo(f"[alerts（告警 webhook）] {cfg.alerts.describe()}")
     typer.echo(f"[mcp（HTTP MCP）] {cfg.mcp.describe()}")
 

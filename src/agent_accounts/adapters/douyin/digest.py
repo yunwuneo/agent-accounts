@@ -17,9 +17,11 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from playwright.async_api import Error as BrowserError
 from sqlmodel import col, select
 
 from agent_accounts.adapters.douyin import PLATFORM
@@ -27,11 +29,11 @@ from agent_accounts.adapters.douyin import media as dmedia
 from agent_accounts.adapters.douyin import store as dstore
 from agent_accounts.adapters.douyin.page import login_state, open_home
 from agent_accounts.browser.session import BrowserSession
-from agent_accounts.core import digests, media, store
+from agent_accounts.core import digests, media, store, watch
 from agent_accounts.core.config import Config, ConfigError
 from agent_accounts.core.errors import HumanRequired
 from agent_accounts.core.run import RunContext
-from agent_accounts.core.transcribe import TranscribeError, transcribe
+from agent_accounts.core.transcribe import transcribe
 from agent_accounts.core.understand import UnderstandError, UnderstandInput, understand
 
 _URL = re.compile(r"douyin\.com/(video|note)/(\d+)")
@@ -94,87 +96,44 @@ MAX_VIDEO_TRIES = 3  # 下载不完整时最多试几个候选地址
 VIDEO_DOWNLOAD_TIMEOUT_S = 600  # 长视频文件大，给足下载时间
 
 
-def _short_by(got: float, expected: float | None) -> bool:
-    """下载到的时长明显短于作品时长（允许 2 秒或 3% 的误差）。"""
-    return bool(expected) and got < expected - max(2.0, expected * 0.03)  # type: ignore[operator]
-
-
 async def _download_full_video(
     s: BrowserSession, m: dmedia.DouyinMedia, tmp: Path, notes: list[str]
 ) -> Path | None:
     """依次尝试候选地址，直到拿到完整的视频；都不完整时用最长的那个，并在 notes 里说明。"""
     urls = (m.video_urls or ([m.video_url] if m.video_url else []))[:MAX_VIDEO_TRIES]
-    best: tuple[float, Path] | None = None
-    last_error = ""
-    for i, url in enumerate(urls):
-        dest = tmp / f"video_{i}.mp4"
-        try:
-            await dmedia.download(s, url, dest, timeout_s=VIDEO_DOWNLOAD_TIMEOUT_S)
-            got = (await media.probe(dest)).duration_s or 0.0
-        except HumanRequired:
-            raise
-        except Exception as e:  # 这个地址下载或解析失败，换下一个
-            last_error = type(e).__name__
-            dest.unlink(missing_ok=True)
-            continue
-        if best is None or got > best[0]:
-            if best:
-                best[1].unlink(missing_ok=True)
-            best = (got, dest)
-        else:
-            dest.unlink(missing_ok=True)
-        if not _short_by(got, m.duration_s):
-            break
-    if best is None:
-        if urls:
-            raise RuntimeError(f"视频下载失败（{last_error}）")
-        return None
-    if _short_by(best[0], m.duration_s):
-        notes.append(
-            f"下载到的视频只有 {media.clock(best[0])}，作品时长 {media.clock(m.duration_s or 0)}，"
-            "后面的内容没有看到"
-        )
-    return best[1]
+
+    async def fetch(url: str, dest: Path) -> Path:
+        return await dmedia.download(s, url, dest, timeout_s=VIDEO_DOWNLOAD_TIMEOUT_S)
+
+    return await watch.download_full_video(fetch, urls, m.duration_s, tmp, notes)
 
 
 async def _transcribe_full(
-    cfg: Config, video: Path, duration_s: float | None, tmp: Path, notes: list[str]
+    cfg: Config,
+    video: Path,
+    duration_s: float | None,
+    tmp: Path,
+    notes: list[str],
+    on_model: Callable[[], None] | None = None,
 ) -> str | None:
     """整段音轨分段转写，按段落拼接并标出时间范围。"""
-    limit = cfg.media.max_video_seconds
-    audio = await media.extract_audio(video, tmp / "audio.mp3", max_seconds=limit)
-    if audio is None:
-        notes.append("视频没有音轨")
-        return None
-    if duration_s and duration_s > limit:
-        notes.append(f"语音只转写了前 {media.clock(limit)}，之后的没有听到")
-    seg_s = cfg.media.transcribe_segment_s
-    segments = await media.split_audio(audio, tmp, segment_s=seg_s)
-    parts: list[str] = []
-    for i, seg in enumerate(segments):
-        try:
-            text = await transcribe(cfg.transcribe, seg)
-        except ConfigError as e:
-            notes.append(f"语音转写失败：{e}")
-            return None
-        except TranscribeError as e:
-            if len(segments) == 1:
-                notes.append(f"语音转写失败：{e}")
-                return None
-            span = f"{media.clock(i * seg_s)}–{media.clock((i + 1) * seg_s)}"
-            notes.append(f"{span} 这段语音转写失败：{e}")
-            continue
-        if text:
-            if len(segments) == 1:
-                parts.append(text)
-            else:
-                end = min((i + 1) * seg_s, duration_s or (i + 1) * seg_s)
-                parts.append(f"[{media.clock(i * seg_s)}–{media.clock(end)}] {text}")
-    return "\n".join(parts) or None
+
+    async def counted(endpoint, audio):
+        if on_model:
+            endpoint.require_key("transcribe")
+            on_model()
+        return await transcribe(endpoint, audio)
+
+    return await watch.transcribe_full(cfg, video, duration_s, tmp, notes, transcribe=counted)
 
 
 async def _build_input(
-    s: BrowserSession, cfg: Config, m: dmedia.DouyinMedia, tmp: Path
+    s: BrowserSession,
+    cfg: Config,
+    m: dmedia.DouyinMedia,
+    tmp: Path,
+    *,
+    on_model: Callable[[], None] | None = None,
 ) -> tuple[UnderstandInput, list[str]]:
     notes: list[str] = []
     inp = UnderstandInput(
@@ -197,7 +156,7 @@ async def _build_input(
         )
         inp.images, inp.frame_times = frames.paths, frames.times
         inp.duration_s = inp.duration_s or frames.duration_s
-        inp.transcript = await _transcribe_full(cfg, video, frames.duration_s, tmp, notes)
+        inp.transcript = await _transcribe_full(cfg, video, frames.duration_s, tmp, notes, on_model)
         video.unlink()
         # 覆盖不完整的情况也告诉模型，避免它把没看到的部分当作不存在
         inp.notes.extend(n for n in notes if "没有看到" in n or "没有听到" in n)
@@ -214,9 +173,14 @@ async def _build_input(
 
 
 async def _unavailable_input(
-    s: BrowserSession, cfg: Config, m: dmedia.DouyinMedia, tmp: Path
+    s: BrowserSession,
+    cfg: Config,
+    m: dmedia.DouyinMedia,
+    tmp: Path,
+    *,
+    message: dstore.DouyinMessage | None = None,
 ) -> tuple[UnderstandInput, list[str]]:
-    msg = share_message(m.aweme_id)
+    msg = message if message is not None else share_message(m.aweme_id)
     note = (
         f"作品当前不可见（{m.filter_reason}），"
         "只能根据私信分享卡片的标题、作者和封面理解，可能不完整"
@@ -233,6 +197,8 @@ async def _unavailable_input(
             inp.images = [
                 await media.to_jpeg(raw, tmp / "cover.jpg", max_side=cfg.media.frame_width)
             ]
+        except HumanRequired:
+            raise
         except Exception as e:  # 封面拿不到也继续，只用文字
             return inp, [note, f"封面下载失败：{type(e).__name__}"]
     return inp, [note]
@@ -284,7 +250,14 @@ async def digest_in_session(
 
 
 async def _digest_one(
-    s: BrowserSession, cfg: Config, run: RunContext, aweme_id: str, hint: dmedia.Kind
+    s: BrowserSession,
+    cfg: Config,
+    run: RunContext,
+    aweme_id: str,
+    hint: dmedia.Kind,
+    *,
+    message: dstore.DouyinMessage | None = None,
+    on_model: Callable[[], None] | None = None,
 ) -> DigestOutcome:
     try:
         m = await dmedia.resolve(s, aweme_id, hint)
@@ -292,14 +265,26 @@ async def _digest_one(
             return DigestOutcome(aweme_id, error="没有拿到作品信息")
         with tempfile.TemporaryDirectory(prefix="aa-media-") as tmp_dir:
             tmp = Path(tmp_dir)
-            build = _build_input if m.available else _unavailable_input
-            inp, notes = await build(s, cfg, m, tmp)
+            if m.available:
+                inp, notes = await _build_input(s, cfg, m, tmp, on_model=on_model)
+            else:
+                inp, notes = await _unavailable_input(s, cfg, m, tmp, message=message)
+            cfg.llm.understand.require_key("llm.understand")
+            if on_model:
+                on_model()
             out = await understand(cfg.llm.understand, inp)
     except HumanRequired:
         raise
-    except (UnderstandError, media.MediaError, RuntimeError) as e:
-        run.audit("douyin.digest.error", aweme_id=aweme_id, error=str(e)[:300])
-        return DigestOutcome(aweme_id, error=str(e))
+    except (
+        UnderstandError,
+        media.MediaError,
+        RuntimeError,
+        ConfigError,
+        BrowserError,
+        OSError,
+    ) as e:
+        run.audit("douyin.digest.error", aweme_id=aweme_id, error=type(e).__name__)
+        return DigestOutcome(aweme_id, error=f"媒体分析失败（{type(e).__name__}）")
 
     digest = digests.save(
         digests.MediaDigest(

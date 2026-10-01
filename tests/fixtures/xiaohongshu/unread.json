@@ -1,0 +1,12 @@
+{
+ "code": 0,
+ "success": true,
+ "msg": "成功",
+ "data": {
+  "user_chat_unread_counts": {
+   "bbbbbbbbbbbbbbbbbbbbbbbb": 5,
+   "cccccccccccccccccccccccc": 1
+  },
+  "group_chat_unread_counts": {}
+ }
+}

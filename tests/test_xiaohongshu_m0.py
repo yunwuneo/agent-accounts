@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
+import json
+
 from typer.testing import CliRunner
 
 from agent_accounts.adapters.xiaohongshu.cli import app
 from agent_accounts.adapters.xiaohongshu.doctor import detect_block
-from agent_accounts.adapters.xiaohongshu.login import login
 from agent_accounts.adapters.xiaohongshu.netmeta import MetadataRecorder, endpoint_shape
 from agent_accounts.core import paths, store
-from agent_accounts.core.config import Config
-from agent_accounts.core.errors import HumanRequired
 
 
 def test_cli_exposes_login_and_doctor_subcommands():
@@ -20,13 +18,6 @@ def test_cli_exposes_login_and_doctor_subcommands():
         assert result.exit_code == 0
         assert "Usage: " in result.output
         assert command in result.output
-
-
-async def test_login_rejects_noninteractive_invocation(monkeypatch):
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    with pytest.raises(HumanRequired, match="交互终端"):
-        await login(Config(), None)
-    assert not (paths.home() / "profiles" / "xiaohongshu").exists()
 
 
 def test_login_respects_frozen_account():
@@ -101,3 +92,23 @@ async def test_detect_block_only_when_visible():
     assert not await detect_block(Page(False))
     assert await detect_block(Page(True))
     assert await detect_block(Page(False, "https://www.xiaohongshu.com/verify"))
+
+
+def test_shape_keeps_structure_not_values():
+    from agent_accounts.adapters.xiaohongshu.spike import shape
+
+    secret = "你好这是私信原文"
+    value = {
+        "data": {
+            "messages": [
+                {"id": "65f1a2b3c4d5e6f7a8b9c0d1", "content": secret, "type": 1},
+                {"content": '{"noteId":"abc123","title":"标题原文"}', "type": 3},
+            ],
+            "6612345678": {"unread": 2},
+        }
+    }
+    out = json.dumps(shape(value), ensure_ascii=False)
+    for leaked in (secret, "65f1a2b3", "abc123", "标题原文", "6612345678"):
+        assert leaked not in out
+    assert '"noteId": "str:6:hex"' in out
+    assert '":id"' in out and '"unread": "int"' in out

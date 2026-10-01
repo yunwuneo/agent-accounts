@@ -1,0 +1,98 @@
+{
+ "code": 0,
+ "success": true,
+ "msg": "成功",
+ "data": {
+  "result": {
+   "success": true,
+   "code": 0,
+   "message": "success"
+  },
+  "out_message_list": [
+   {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbb.aaaaaaaaaaaaaaaaaaaaaaaa.00000006",
+    "uuid": "000000000000000000000000000000000000000006",
+    "store_id": 6,
+    "sender_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "created_at": 1790000006000,
+    "revoked": false,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"{\\\"frontChain\\\": \\\"[笔记]一条视频笔记\\\", \\\"title\\\": \\\"一条视频笔记\\\", \\\"image\\\": \\\"https://cover.example/i.jpg\\\", \\\"cover\\\": \\\"https://cover.example/c.jpg\\\", \\\"link\\\": \\\"https://www.xiaohongshu.com/discovery/item/6600000000000000000000a1?source=im&xsec_token=TOKENvideo=&xsec_source=app_share\\\", \\\"type\\\": \\\"note\\\", \\\"noteType\\\": \\\"video\\\", \\\"user\\\": {\\\"id\\\": \\\"eeeeeeeeeeeeeeeeeeeeeeee\\\", \\\"nickname\\\": \\\"作者\\\", \\\"image\\\": \\\"https://avatar.example/a.jpg\\\"}, \\\"id\\\": \\\"6600000000000000000000a1\\\", \\\"ts\\\": 1790000000, \\\"showExpression\\\": false, \\\"expression\\\": \\\"[]\\\"}\", \"content_type\": 3, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"[笔记]一条视频笔记\"}"
+   },
+   {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbb.aaaaaaaaaaaaaaaaaaaaaaaa.00000005",
+    "uuid": "000000000000000000000000000000000000000005",
+    "store_id": 5,
+    "sender_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "created_at": 1790000005000,
+    "revoked": false,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"{\\\"frontChain\\\": \\\"[笔记]一条图文笔记\\\", \\\"title\\\": \\\"一条图文笔记\\\", \\\"image\\\": \\\"https://cover.example/i.jpg\\\", \\\"cover\\\": \\\"https://cover.example/c.jpg\\\", \\\"link\\\": \\\"https://www.xiaohongshu.com/discovery/item/6600000000000000000000a2?source=im&xsec_token=TOKENnormal=&xsec_source=app_share\\\", \\\"type\\\": \\\"note\\\", \\\"noteType\\\": \\\"normal\\\", \\\"user\\\": {\\\"id\\\": \\\"eeeeeeeeeeeeeeeeeeeeeeee\\\", \\\"nickname\\\": \\\"作者\\\", \\\"image\\\": \\\"https://avatar.example/a.jpg\\\"}, \\\"id\\\": \\\"6600000000000000000000a2\\\", \\\"ts\\\": 1790000000, \\\"showExpression\\\": false, \\\"expression\\\": \\\"[]\\\"}\", \"content_type\": 3, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"[笔记]一条图文笔记\"}"
+   },
+   {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbb.aaaaaaaaaaaaaaaaaaaaaaaa.00000004",
+    "uuid": "000000000000000000000000000000000000000004",
+    "store_id": 4,
+    "sender_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "created_at": 1790000004000,
+    "revoked": false,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"{\\\"md5\\\": \\\"00000000000000000000000000000000\\\", \\\"upload_id\\\": \\\"\\\", \\\"originSize\\\": 1000, \\\"imageDataMap\\\": {\\\"IM_ORG\\\": {\\\"url\\\": \\\"https://im-img.example/org.jpg\\\", \\\"imageScene\\\": \\\"IM_ORG\\\"}, \\\"IM_DTL\\\": {\\\"url\\\": \\\"https://im-img.example/dtl.jpg\\\", \\\"imageScene\\\": \\\"IM_DTL\\\"}, \\\"IM_PRV\\\": {\\\"url\\\": \\\"https://im-img.example/prv.jpg\\\", \\\"imageScene\\\": \\\"IM_PRV\\\"}}, \\\"size\\\": {\\\"width\\\": 1080, \\\"height\\\": 1440}, \\\"link\\\": \\\"https://im-img.example/link.jpg\\\", \\\"imageFileId\\\": \\\"file\\\", \\\"asset_length\\\": 1, \\\"isSendOriginal\\\": false}\", \"content_type\": 2, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"[图片]\"}"
+   },
+   {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbb.aaaaaaaaaaaaaaaaaaaaaaaa.00000003",
+    "uuid": "000000000000000000000000000000000000000003",
+    "store_id": 3,
+    "sender_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "created_at": 1790000003000,
+    "revoked": false,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"你好呀\", \"content_type\": 1, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"你好呀\"}"
+   },
+   {
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbb.00000002",
+    "uuid": "000000000000000000000000000000000000000002",
+    "store_id": 2,
+    "sender_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "receiver_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "created_at": 1790000002000,
+    "revoked": true,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"撤回的话\", \"content_type\": 1, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"撤回的话\"}"
+   },
+   {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbb.aaaaaaaaaaaaaaaaaaaaaaaa.00000001",
+    "uuid": "000000000000000000000000000000000000000001",
+    "store_id": 1,
+    "sender_id": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiver_id": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "created_at": 1790000001000,
+    "revoked": false,
+    "domain": "sns",
+    "group_chat": false,
+    "extra_status": 0,
+    "range_blank_end_store_id": 0,
+    "content": "{\"content\": \"\", \"content_type\": 0, \"not_front_chain\": false, \"not_unread_count\": false, \"front_chain\": \"你们已互相关注\"}"
+   }
+  ]
+ }
+}

@@ -45,16 +45,17 @@ class BrowserConfig(BaseModel):
     pause_max: float = 1.8
 
 
-class DouyinConfig(BaseModel):
+class AutoReplyConfig(BaseModel):
+    """各平台自动回复循环共用的配置。"""
+
     # 写错键名（如 auto-reply）时报错，而不是静默回落到默认的 dry_run
     model_config = ConfigDict(extra="forbid")
 
-    base_url: str = "https://www.douyin.com/"
     # 默认保守：新能力先以 dry_run 上线
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
     context_messages: int = 20  # 回复决策时带上的最近消息条数
     digest_per_tick: int = 3  # 每轮最多自动分析几个新分享的作品（控制成本）
-    interval_min_s: int = 60  # douyin run 两轮之间的随机间隔
+    interval_min_s: int = 60  # run 两轮之间的随机间隔
     interval_max_s: int = 120
     # 休息时段（本机时间，如 ["03:00-08:00", "11:00-12:00"]）：run 和 sync --watch 在这些时间里
     # 不开浏览器、不同步、不回复；结束后再随机晚 0–quiet_wake_jitter_s 秒醒来，积压的新消息合并处理
@@ -69,6 +70,15 @@ class DouyinConfig(BaseModel):
 
     def quiet_until(self, now: datetime) -> datetime | None:
         return schedule.quiet_until(now, schedule.parse_windows(self.quiet_hours))
+
+
+class DouyinConfig(AutoReplyConfig):
+    base_url: str = "https://www.douyin.com/"
+
+
+class XiaohongshuConfig(AutoReplyConfig):
+    # 小红书读完整消息要点进会话；每轮最多点开几个有新消息的会话
+    max_open: int = Field(default=5, ge=1, le=20)
 
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
@@ -163,6 +173,21 @@ class GuardConfig(BaseModel):
     max_per_hour: int = 20
     max_per_day: int = 100
     extra_block_words: list[str] = Field(default_factory=list)
+
+
+class ReplyToolsConfig(BaseModel):
+    """回复模型的工具调用（Notion「回复模型工具调用：设计方案」）。
+
+    打开后回复模型在一次决策里可以按需调用只读工具（翻更早的消息、搜索、看分享的完整分析、
+    看对方关系），查完再给出决定。paid 可单独启用小红书图片理解；默认不启用付费工具。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False  # 默认关：先用 decide --tools 试运行对比
+    max_rounds: int = Field(default=4, ge=1, le=8)  # 每次决策最多调用几轮工具
+    paid: list[Literal["view_image", "analyze_share"]] = Field(default_factory=list)
+    max_paid_calls: int = Field(default=2, ge=0, le=8)
 
 
 class AlertsConfig(BaseModel):
@@ -272,10 +297,12 @@ class McpConfig(BaseModel):
 class Config(BaseModel):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     douyin: DouyinConfig = Field(default_factory=DouyinConfig)
+    xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     guard: GuardConfig = Field(default_factory=GuardConfig)
+    reply_tools: ReplyToolsConfig = Field(default_factory=ReplyToolsConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
 
