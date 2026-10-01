@@ -159,14 +159,14 @@ def guard_input(cfg, expected, mode, decision=None):
     )
 
 
-def permitted(cfg, initial, allow_send):
+def permitted(cfg, initial, allow_send, *, allow_quiet=False):
     if cfg.douyin.android != initial.douyin.android:
         raise HumanRequired("安卓配置在运行中变化，请重新确认并启动")
     if store.get_account("douyin").status != "active":
         raise HumanRequired("账号已停止或冻结")
     if cfg.douyin.auto_reply == "off" or cfg.douyin.android.auto_reply == "off":
         raise HumanRequired("自动回复已关闭")
-    if cfg.douyin.quiet_until(datetime.now().astimezone()):
+    if not allow_quiet and cfg.douyin.quiet_until(datetime.now().astimezone()):
         raise HumanRequired("进入休息时段，本次安卓监听结束")
     return "on" if allow_send and cfg.douyin.android.auto_reply == "on" else "dry_run"
 
@@ -188,20 +188,39 @@ async def watch(
     sleep=asyncio.sleep,
     on_ready=None,
     media_enabled=False,
+    continuous=False,
+    recover_navigation=False,
+    trigger=None,
 ):
     """最多一次模型决策和一次单条发送。重启重新基线，不追补离线期间消息。"""
     if not confirmed:
         raise AndroidError("需人工确认专用账号、唯一互关私聊、消息底部，运行期间不要操作手机")
-    if not 1 <= seconds <= 3600 or not 1 <= poll_s <= 60:
+    if not 1 <= seconds <= 3600 or not 1 <= poll_s <= (604800 if continuous else 60):
         raise AndroidError("监听时长须为 1–3600 秒，轮询间隔须为 1–60 秒")
     if allow_send and (
         not generate or not cfg.douyin.android.allow_send or cfg.douyin.android.auto_reply != "on"
     ):
         raise AndroidError("真实自动回复需要 --generate、--allow-send 和两个安卓配置开关")
-    loader = load_config or config.load
+    config_loader = load_config or config.load
+
+    def loader():
+        if trigger is not None:
+            trigger.check()
+        return config_loader()
+
     decider = decide or decide_once
-    mode = permitted(cfg, cfg, allow_send)
-    previous = read_messages(s.source(), expected, self_name)
+    mode = permitted(cfg, cfg, allow_send, allow_quiet=continuous)
+
+    def current_root(previous=None):
+        if recover_navigation:
+            from agent_accounts.adapters.douyin.android.navigation import ensure_thread
+
+            return ensure_thread(
+                s, run, expected, self_name, confirmed=confirmed, previous=previous
+            )
+        return s.source()
+
+    previous = read_messages(current_root(), expected, self_name)
     if {m.from_me for m in previous} != {False, True}:
         raise AndroidError("初始可见记录必须同时包含双方头像与消息，以核对当前账号和私聊")
     if messaging.thread(s.source(), expected)["draft"]:
@@ -210,15 +229,49 @@ async def watch(
     if on_ready is not None:
         on_ready()
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        await sleep(poll_s)
+    decisions = 0
+    parked = False
+    while continuous or time.monotonic() < deadline:
+        if trigger is not None:
+            # Leave the conversation only after rechecking it; don't discard drafts
+            # or absorb any concurrent peer message into the processed baseline.
+            if not parked:
+                root = s.source()
+                if messaging.thread(root, expected)["draft"]:
+                    raise HumanRequired("存在草稿，停止通知等待")
+                s.request("/appium/device/press_keycode", {"keycode": 3}, method="POST")
+                parked = True
+            last_health = time.monotonic()
+
+            def health():
+                nonlocal last_health
+                if time.monotonic() - last_health >= 30:
+                    permitted(loader(), cfg, allow_send, allow_quiet=True)
+                    s.request("/appium/device/is_locked", {}, method="POST")
+                    last_health = time.monotonic()
+
+            reason = await trigger.wait(poll_s, health)
+            run.audit("android.auto.trigger", reason=reason)
+        else:
+            remaining = poll_s
+            while remaining > 0:
+                await sleep(min(remaining, 30) if continuous else remaining)
+                remaining -= min(remaining, 30) if continuous else remaining
+                if continuous:
+                    permitted(loader(), cfg, allow_send, allow_quiet=True)
         current_cfg = loader()
+        if continuous and current_cfg.douyin.quiet_until(datetime.now().astimezone()):
+            run.audit("android.auto.waiting", reason="quiet_hours")
+            # Keep Appium alive through long quiet windows without UI actions.
+            s.request("/appium/device/is_locked", {}, method="POST")
+            continue
         mode = permitted(current_cfg, cfg, allow_send)
-        root = s.source()
+        root = current_root(previous)
+        parked = False
         if messaging.thread(root, expected)["draft"]:
             raise HumanRequired("出现人工草稿，本次监听停止")
         current = read_messages(root, expected, self_name)
-        new = appended(previous, current)
+        new = [] if continuous and same_tail(previous, current) else appended(previous, current)
         if not new:
             continue
         if any(m.from_me for m in new):
@@ -226,16 +279,24 @@ async def watch(
         new_shares = [m for m in new if m.kind != "text"]
         if new_shares and (not media_enabled or not generate or len(new_shares) != 1):
             run.audit("android.auto.deferred", reason="unverified_media", count=len(new))
+            if continuous:
+                continue  # retain baseline; never discard unprocessed shares
             return {"status": "deferred", "reason": "新消息含未验证媒体，未调用模型或发送"}
         pre = guard.check(current_cfg.guard, guard_input(current_cfg, expected, mode))
         if not pre.ok:
             run.audit("android.auto.blocked", reasons=pre.reasons)
+            if continuous:
+                continue  # cooldown/rate limits can expire; no model call yet
             return {"status": "blocked", "reasons": pre.reasons}
         if not generate:
             run.audit("android.auto.observed", count=len(new))
+            if continuous:
+                previous = current
+                continue
             return {"status": "observed", "new_messages": len(new), "model_called": False}
         summaries = {}
-        request_id = None
+        decisions += 1
+        request_id = f"auto_{run.id}_{decisions}" if continuous else None
         if new_shares:
             from agent_accounts.adapters.douyin.android import media_reply, shares
 
@@ -258,7 +319,7 @@ async def watch(
                 expected_snapshot=current,
             )
             summaries[card_hash] = summary
-        return await respond(
+        result = await respond(
             s,
             run,
             cfg,
@@ -274,6 +335,14 @@ async def watch(
             summaries=summaries,
             request_id=request_id,
         )
+        if not continuous:
+            return result
+        previous = current
+        if result.get("status") == "ui_verified":
+            # Only acknowledge our own verified echo. Do not absorb an incoming
+            # message that may have arrived during send verification.
+            previous = current + [Message(True, "text", result["reply"])]
+        run.audit("android.auto.cycle", status=result["status"], decisions=decisions)
     run.audit("android.auto.idle")
     return {"status": "idle", "decisions": 0}
 

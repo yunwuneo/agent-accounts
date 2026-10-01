@@ -85,6 +85,10 @@ class AndroidConfig(BaseModel):
     auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
     tested_version: str = "40.4.0"
     request_timeout_s: float = Field(default=60, gt=0, le=120)
+    monitor_interval_s: float = Field(default=7200, ge=1, le=604800)
+    monitor_trigger: Literal["poll", "notification"] = "notification"
+    thread_name: str = ""
+    self_name: str = ""
 
     @field_validator("appium_url")
     @classmethod
@@ -388,6 +392,62 @@ def load() -> Config:
 _SECTION = re.compile(r"^[ \t]*\[mcp\][ \t]*(#.*)?$", re.M)
 _HEADER = re.compile(r"^[ \t]*\[", re.M)
 _TOKEN_LINE = re.compile(r"^[ \t]*token[ \t]*=.*$", re.M)
+
+
+def write_android_monitor(interval_s: float, trigger: str) -> Path:
+    """Change only monitor scheduling; never print/rewrite keys or sending permissions."""
+    import copy
+    import tempfile
+
+    try:
+        AndroidConfig(monitor_interval_s=interval_s, monitor_trigger=trigger)
+    except ValidationError:
+        raise ConfigError("补漏间隔须为 1 秒–7 天，触发方式为 notification 或 poll") from None
+    path = paths.config_path()
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    try:
+        data = tomllib.loads(text)
+        expected = copy.deepcopy(data)
+        expected.setdefault("douyin", {}).setdefault("android", {}).update(
+            monitor_interval_s=interval_s, monitor_trigger=trigger
+        )
+        header = re.search(r"^[ \t]*\[douyin\.android\][ \t]*(?:#.*)?$", text, re.M)
+        if header:
+            start = header.end()
+            following = _HEADER.search(text, start)
+            end = following.start() if following else len(text)
+            body = text[start:end]
+        else:
+            text = text.rstrip() + "\n\n[douyin.android]\n"
+            start = end = len(text)
+            body = ""
+        for key, value in {
+            "monitor_interval_s": str(float(interval_s)),
+            "monitor_trigger": f'"{trigger}"',
+        }.items():
+            pattern = re.compile(rf"^[ \t]*{key}[ \t]*=.*$", re.M)
+            line = f"{key} = {value}"
+            body = (
+                pattern.sub(line, body)
+                if pattern.search(body)
+                else body.rstrip() + "\n" + line + "\n"
+            )
+        updated = text[:start] + body + text[end:]
+        if tomllib.loads(updated) != expected:
+            raise ValueError
+        Config.model_validate(expected)
+    except (ValueError, TypeError, AttributeError):
+        raise ConfigError("配置结构不支持安全局部更新，未写入任何内容") from None
+    paths.ensure_dir(path.parent)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(updated)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return path
 
 
 def write_mcp_token(token: str, *, rotate: bool = False) -> Path:

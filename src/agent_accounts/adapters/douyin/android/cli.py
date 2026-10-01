@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Annotated
 
@@ -16,12 +18,12 @@ from agent_accounts.core.run import start_run
 app = typer.Typer(help="可选安卓真机后端；自动回复需显式运行 android run", no_args_is_help=True)
 
 
-def invoke(command, fn, *, device=True, require_active=True):
+def invoke(command, fn, *, device=True, require_active=True, allow_external=False):
     try:
         cfg = config.load()
         with start_run("douyin", "android." + command, require_active=require_active) as run:
             if device:
-                with AndroidSession(cfg.douyin.android) as s:
+                with AndroidSession(cfg.douyin.android, allow_external=allow_external) as s:
                     result = fn(s, run, cfg)
             else:
                 result = fn(None, run, cfg)
@@ -29,6 +31,22 @@ def invoke(command, fn, *, device=True, require_active=True):
     except AgentAccountsError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from None
+
+
+@app.command()
+def inspect():
+    """只读定位当前页面；可在手机桌面或其他 App 运行，不输出页面原文。"""
+    from agent_accounts.adapters.douyin.android import navigation
+
+    invoke("inspect", lambda s, r, c: navigation.inspect(s, r), allow_external=True)
+
+
+@app.command("open")
+def open_app(execute: bool = typer.Option(False, "--execute", help="实际启动或切回抖音")):
+    """从桌面/其他 App 进入抖音并识别页面；默认仅检查，不切换。"""
+    from agent_accounts.adapters.douyin.android import navigation
+
+    invoke("open", lambda s, r, c: navigation.open_app(s, r, execute=execute), allow_external=True)
 
 
 @app.command()
@@ -81,6 +99,114 @@ def auto_reply(
             )
         ),
     )
+
+
+@app.command("monitor")
+def monitor(
+    confirm_current_thread: bool = typer.Option(
+        False, help="确认配置双方昵称、专用账号、互关私聊及底部"
+    ),
+    generate: bool = typer.Option(False, help="允许每批新消息调用回复模型"),
+    allow_send: bool = typer.Option(False, help="允许实际自动回复，仍须配置开关"),
+    media_enabled: bool = typer.Option(False, "--media", help="允许新分享解析和媒体理解"),
+):
+    """长驻监控配置指定的当前私聊；使用 monitor_interval_s，不按时长或回复次数退出。"""
+    from agent_accounts.adapters.douyin.android.autoreply import watch
+
+    def execute(s, r, c):
+        ac = c.douyin.android
+        if not ac.thread_name.strip() or not ac.self_name.strip():
+            raise config.ConfigError("请配置安卓 thread_name 和 self_name 精确昵称")
+        from agent_accounts.adapters.douyin.android.notifications import NotificationTrigger
+
+        bridge = (
+            NotificationTrigger(s, ac.thread_name)
+            if ac.monitor_trigger == "notification"
+            else nullcontext()
+        )
+        with bridge as trigger:
+            return asyncio.run(
+                watch(
+                    s,
+                    r,
+                    c,
+                    ac.thread_name,
+                    ac.self_name,
+                    confirmed=confirm_current_thread,
+                    generate=generate,
+                    allow_send=allow_send,
+                    media_enabled=media_enabled,
+                    continuous=True,
+                    recover_navigation=True,
+                    poll_s=ac.monitor_interval_s,
+                    trigger=trigger,
+                    on_ready=lambda: typer.echo(
+                        f"安卓监控已就绪；触发 {ac.monitor_trigger}；"
+                        f"补漏 {ac.monitor_interval_s:g} 秒；run_id={r.id}",
+                        err=True,
+                    ),
+                )
+            )
+
+    invoke("monitor", execute, allow_external=True)
+
+
+@app.command("monitor-config")
+def monitor_config(
+    interval_minutes: float = typer.Option(120, min=1 / 60, max=10080, help="补漏间隔，分钟"),
+    trigger: str = typer.Option("notification", help="notification 或 poll"),
+):
+    """修改持久监控配置；不启动进程、不改变发送权限。运行中修改会停止，须重新启动。"""
+    try:
+        config.write_android_monitor(interval_minutes * 60, trigger)
+    except AgentAccountsError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from None
+    typer.echo(f"已保存：触发={trigger}，补漏间隔={interval_minutes:g}分钟；重新启动监控后生效。")
+
+
+@app.command("notification-check")
+def notification_check(
+    seconds: int = typer.Option(30, min=1, max=300),
+    until_update: bool = typer.Option(False, help="收到目标通知后立即结束验证"),
+):
+    """只检查通知桥并统计目标触发数；不读取私聊、不导航、不调用模型或发送。"""
+    from agent_accounts.adapters.douyin.android.notifications import NotificationTrigger
+
+    def execute(s, r, c):
+        ac = c.douyin.android
+        if not ac.enabled or not ac.udid or not ac.thread_name:
+            raise config.ConfigError("请先配置安卓设备及目标昵称")
+        with NotificationTrigger(AndroidSession(ac), ac.thread_name) as bridge:
+            typer.echo("通知桥已连接；正在等待目标通知（不发送）。", err=True)
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                bridge.check()
+                if until_update and bridge.sequence:
+                    break
+                time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+            bridge.check()
+            return {
+                "connected": True,
+                "target_updates": bridge.sequence,
+                "diagnostics": bridge.stats,
+                "sent": False,
+            }
+
+    invoke("notification-check", execute, device=False)
+
+
+@app.command("enter-thread")
+def enter_thread(confirm_mutual: bool = typer.Option(False, help="确认配置目标是唯一互关私聊")):
+    """按配置昵称返回目标私聊并校验，不调用模型或发送。进入会话会标记已读。"""
+    from agent_accounts.adapters.douyin.android.navigation import ensure_thread
+
+    def execute(s, r, c):
+        ac = c.douyin.android
+        ensure_thread(s, r, ac.thread_name, ac.self_name, confirmed=confirm_mutual)
+        return {"run_id": r.id, "status": "thread_verified", "sent": False}
+
+    invoke("enter-thread", execute, allow_external=True)
 
 
 @app.command("list-shares")

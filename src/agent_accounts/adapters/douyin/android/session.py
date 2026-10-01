@@ -44,7 +44,7 @@ def bounds(node) -> tuple[int, int, int, int]:
     return tuple(map(int, values.groups()))
 
 
-def check_source(xml: str):
+def check_source(xml: str, *, allow_external: bool = False):
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
@@ -54,7 +54,11 @@ def check_source(xml: str):
         raise HumanRequired("安卓界面出现验证或风控信号", freeze=True)
     if any(s in visible for s in ("登录后继续", "登录抖音", "手机号登录")):
         raise HumanRequired("请人工登录安卓专用账号")
+    if "请完善账号安全设置" in visible:
+        raise HumanRequired("请人工处理抖音账号安全设置提示；未关闭提示或继续导航")
     packages = {n.get("package") for n in root.iter() if n.get("package")}
+    if allow_external:
+        return root
     if PACKAGE not in packages:
         raise HumanRequired("请解锁手机并打开抖音目标页面")
     if packages - {PACKAGE, "com.android.systemui"}:
@@ -63,8 +67,9 @@ def check_source(xml: str):
 
 
 class AndroidSession:
-    def __init__(self, cfg: AndroidConfig):
+    def __init__(self, cfg: AndroidConfig, *, allow_external: bool = False):
         self.cfg = cfg
+        self.allow_external = allow_external
         self.sid: str | None = None
         # 禁止环境 HTTP 代理转发手机页面/草稿。
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -132,7 +137,9 @@ class AndroidSession:
                         "appium:skipServerInstallation": True,
                         "appium:skipLogcatCapture": True,
                         "appium:printPageSourceOnFindFailure": False,
-                        "appium:newCommandTimeout": 1200,
+                        "appium:newCommandTimeout": max(
+                            1200, int(self.cfg.monitor_interval_s) + 300
+                        ),
                     },
                     "firstMatch": [{}],
                 }
@@ -142,7 +149,10 @@ class AndroidSession:
         self.sid = value["sessionId"]
         try:
             self.request("/appium/settings", {"settings": {"waitForIdleTimeout": 0}})
-            self.source()
+            if self.allow_external:
+                self.observe()
+            else:
+                self.source()
         except BaseException:
             self.__exit__()
             raise
@@ -159,6 +169,12 @@ class AndroidSession:
 
     def source(self):
         return check_source(self.request("/source"))
+
+    def observe(self):
+        """只供定位/启动入口读取；其他操作始终走严格的 source。"""
+        if self.request("/appium/device/is_locked", {}, method="POST"):
+            raise HumanRequired("请人工解锁手机；不会通过脚本解锁")
+        return check_source(self.request("/source"), allow_external=True)
 
     def element(self, rid: str) -> str:
         value = self.request("/element", {"using": "id", "value": PREFIX + rid})

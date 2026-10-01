@@ -23,6 +23,10 @@ allow_send = false      # 人工单条发送另需 --send --confirm-current-thre
 auto_reply = "dry_run"  # android run 独立开关；真发送还需 --generate --allow-send
 tested_version = "40.4.0"  # 已验收 UI 版本；升级后应重验，不能仅改数字跳过
 request_timeout_s = 60
+monitor_interval_s = 7200 # 补漏间隔（秒），默认2小时，1秒–7天；修改后重新启动
+monitor_trigger = "notification" # 通知触发 + 定时补漏；poll 为仅定时检查
+thread_name = ""          # 人工确认的唯一互关私聊精确昵称
+self_name = ""            # 当前专用账号精确昵称；昵称不是服务端稳定身份
 
 # 小红书：只处理已关注的会话；真正发送同样要 auto_reply = "on" 加 xiaohongshu run --allow-send
 [xiaohongshu]
