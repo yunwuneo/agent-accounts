@@ -21,6 +21,7 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
@@ -72,8 +73,39 @@ class AutoReplyConfig(BaseModel):
         return schedule.quiet_until(now, schedule.parse_windows(self.quiet_hours))
 
 
+class AndroidConfig(BaseModel):
+    """显式启用的真机辅助入口；不会接管网页端 run/sync。"""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    udid: str = ""
+    adb: str = "adb"
+    appium_url: str = "http://127.0.0.1:4725"
+    allow_send: bool = False
+    auto_reply: Literal["on", "off", "dry_run"] = "dry_run"
+    tested_version: str = "40.4.0"
+    request_timeout_s: float = Field(default=60, gt=0, le=120)
+
+    @field_validator("appium_url")
+    @classmethod
+    def _local_server(cls, value: str) -> str:
+        u = urlsplit(value)
+        if (
+            u.scheme != "http"
+            or u.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or u.username
+            or u.password
+            or u.query
+            or u.fragment
+            or u.path not in {"", "/"}
+        ):
+            raise ValueError("Appium 必须是无凭据的本机 HTTP 地址，且不带路径")
+        return value.rstrip("/")
+
+
 class DouyinConfig(AutoReplyConfig):
     base_url: str = "https://www.douyin.com/"
+    android: AndroidConfig = Field(default_factory=AndroidConfig)
 
 
 class XiaohongshuConfig(AutoReplyConfig):

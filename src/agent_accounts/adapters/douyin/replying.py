@@ -28,7 +28,12 @@ class RateStats:
 def rate_stats(conv_id: str, now: datetime) -> RateStats:
     day = dstore.sent_replies_since(now - timedelta(days=1))
     hour = [r for r in day if r.sent_at and r.sent_at >= now - timedelta(hours=1)]
-    in_conv = [r.sent_at for r in day if r.conv_id == conv_id and r.sent_at]
+    # 安卓尚无稳定会话映射：保守地让任一安卓发送影响网页端会话冷却。
+    in_conv = [
+        r.sent_at
+        for r in day
+        if (r.conv_id == conv_id or r.source.startswith("android_")) and r.sent_at
+    ]
     return RateStats(max(in_conv, default=None), len(hour), len(day))
 
 

@@ -200,6 +200,12 @@ def config_show() -> None:
             f"休息时段 {', '.join(d.quiet_hours) or '无'}"
         )
     typer.echo(f"配置文件：{path}{'' if path.exists() else '（不存在，使用默认值）'}")
+    android = cfg.douyin.android
+    typer.echo(
+        f"[douyin.android] enabled={android.enabled}  allow_send={android.allow_send}  "
+        f"auto_reply={android.auto_reply}  设备={'已配置' if android.udid else '未配置'}；"
+        "仅用于 douyin android，有界自动回复须显式运行"
+    )
     sections = {
         "llm.understand（媒体理解）": cfg.llm.understand,
         "llm.reply（回复生成）": cfg.llm.reply,

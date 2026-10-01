@@ -41,9 +41,11 @@ async def test_tools_are_annotated():
         tools = {t.name: t for t in (await c.list_tools()).tools}
     assert set(tools) == {
         "douyin_list_conversations", "douyin_recent_messages",
+        "douyin_android_read_snapshot",
         "get_persona", "update_persona", "get_recent", "update_recent",
     }  # fmt: skip
     assert tools["douyin_recent_messages"].annotations.read_only_hint is True
+    assert tools["douyin_android_read_snapshot"].annotations.read_only_hint is True
     assert tools["update_persona"].annotations.read_only_hint is False
     assert not any("send" in name for name in tools)  # 不暴露发送
 

@@ -12,6 +12,7 @@ from typing import Any
 
 from agent_accounts.core import alerts, audit, paths, store
 from agent_accounts.core.errors import AccountFrozen, HumanRequired
+from agent_accounts.core.operation_lock import platform_lock
 
 
 def new_run_id() -> str:
@@ -50,6 +51,25 @@ def _finish(run_id: str, status: store.RunStatus, error: str | None = None) -> N
 @contextmanager
 def start_run(platform: str, command: str, *, require_active: bool = True) -> Iterator[RunContext]:
     """开始一次运行。``require_active`` 为真时，账号被冻结就直接拒绝。"""
+    with (
+        platform_lock(platform),
+        _start_run(platform, command, require_active=require_active) as ctx,
+    ):
+        yield ctx
+
+
+@contextmanager
+def _start_run(platform: str, command: str, *, require_active: bool) -> Iterator[RunContext]:
+    if platform == "douyin" and require_active:
+        from sqlmodel import select
+
+        from agent_accounts.adapters.douyin.android.messaging import AndroidSend
+
+        with store.session() as db:
+            pending = db.exec(select(AndroidSend).where(AndroidSend.state == "pending")).first()
+        if pending:
+            store.set_account_status(platform, "frozen")
+            raise AccountFrozen("安卓存在待核对发送，请人工 resolve-send 后再 unfreeze")
     account = store.get_account(platform)
     if require_active and account.status == "frozen":
         raise AccountFrozen(f"{platform} 账号已冻结，拒绝执行 {command}")

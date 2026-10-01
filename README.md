@@ -20,6 +20,16 @@ uv run agent-accounts freeze douyin   # 一键冻结，之后一切自动化操�
 运行数据（浏览器 profile、SQLite、失败快照）都放在 `~/.agent-accounts/`，可用 `AGENT_ACCOUNTS_HOME` 覆盖，不会进入仓库。
 可选配置 `~/.agent-accounts/config.toml`，字段见 `src/agent_accounts/core/config.py`。
 
+## 可选安卓真机后端
+
+`douyin android` 提供真机自检、当前会话快照、人工单条发送、图集逐页截图、视频循环采样、
+官方图集导出、KuKuTool 网页自动解析下载和手工文件导入。网页端仍为默认入口，两者共享账号冻结、审计、发送限额及
+跨进程操作锁。安卓默认关闭；新增 `douyin android run`，有界监听当前私聊并自动回复新文本，
+默认只观察，显式授权后最多一次回复决策和一条发送。`run --media` 可分析一条新分享，
+`list-shares` / `reply-share` 可明确选择历史视频或图集进行理解与回复；未验证媒体会暂缓，尚无稳定消息同步。
+
+配置、手机准备和逐项命令见 [安卓使用说明](docs/android.md)。
+
 ## MCP
 
 `uv run agent-accounts mcp` 启动 stdio MCP server，给 Echo 用：
@@ -28,6 +38,7 @@ uv run agent-accounts freeze douyin   # 一键冻结，之后一切自动化操�
 |---|---|
 | `douyin_list_conversations` | 会话列表（昵称、是否互关、未读、最后一条） |
 | `douyin_recent_messages` | 最近的私信往来；可指定会话（conv_id 或昵称），不指定就是所有会话 |
+| `douyin_android_read_snapshot` | 按运行编号读取安卓本地界面快照；不连接手机，不冒充完整历史 |
 | `get_persona` / `update_persona` | 读取 / 整体替换人设 `~/.agent-accounts/persona.md` |
 | `get_recent` / `update_recent` | 读取 / 整体替换近况 `~/.agent-accounts/recent.md`（可清空） |
 

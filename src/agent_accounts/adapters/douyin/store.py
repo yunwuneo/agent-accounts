@@ -304,7 +304,12 @@ def sent_replies_since(since: datetime, conv_id: str | None = None) -> list[Douy
         )
         if conv_id:
             q = q.where(DouyinReply.conv_id == conv_id)
-        return list(s.exec(q).all())
+        rows = list(s.exec(q).all())
+        for row in rows:
+            # SQLite 丢失 timezone 标记；落库本身是 UTC，不按本机时区转换。
+            if row.sent_at is not None and row.sent_at.tzinfo is None:
+                row.sent_at = row.sent_at.replace(tzinfo=UTC)
+        return rows
 
 
 def set_handled(conv_id: str, index: int) -> None:

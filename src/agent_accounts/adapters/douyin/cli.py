@@ -9,12 +9,14 @@ from typing import Any
 import typer
 
 from agent_accounts.adapters.douyin import PLATFORM
+from agent_accounts.adapters.douyin.android.cli import app as android_app
 from agent_accounts.core import config, console
 from agent_accounts.core.config import ConfigError
 from agent_accounts.core.errors import AccountFrozen, HumanRequired
 from agent_accounts.core.run import start_run
 
 app = typer.Typer(help="抖音适配器", no_args_is_help=True)
+app.add_typer(android_app, name="android")
 
 
 @app.callback()

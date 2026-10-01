@@ -117,6 +117,26 @@ def douyin_list_conversations(limit: int = 20) -> list[dict[str, Any]]:
 
 @server.tool(annotations=READ)
 @_logged
+def douyin_android_read_snapshot(run_id: str) -> dict[str, Any]:
+    """读取指定安卓运行的本地界面快照；无手机操作，不是完整历史或稳定消息 ID。"""
+    import json
+    import re
+
+    from agent_accounts.core import paths, store
+
+    if not re.fullmatch(r"\d{8}-\d{6}-[a-f0-9]{4}", run_id):
+        raise ValueError("无效运行编号")
+    with store.session() as db:
+        run = db.get(store.Run, run_id)
+        if not run or run.platform != "douyin" or run.command != "android.snapshot":
+            raise ValueError("不是安卓会话快照运行")
+        if run.status != "ok":
+            raise ValueError("快照运行未成功")
+    return json.loads((paths.runs_dir() / run_id / "thread.json").read_text("utf-8"))
+
+
+@server.tool(annotations=READ)
+@_logged
 def douyin_recent_messages(conversation: str | None = None, limit: int = 20) -> dict[str, Any]:
     """读取最近的抖音私信往来（按时间先后排列，from_me=true 是自己发的）。
 

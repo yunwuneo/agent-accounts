@@ -12,6 +12,18 @@ interval_max_s = 120     # （最长）
 quiet_hours = []         # 休息时段，本机时间，如 ["03:00-08:00", "11:00-12:00"]；可跨午夜 "23:00-07:00"
 quiet_wake_jitter_s = 300  # 休息结束后再随机晚 0–N 秒醒来，避免每天整点上线
 
+# 可选安卓辅助后端：仅 douyin android 命令使用，不改变网页端 run/sync。
+# 准备方法与操作限制见 docs/android.md；不自动安装驱动、解锁或登录。
+[douyin.android]
+enabled = false
+udid = ""               # adb devices 中明确授权的专用手机序列号
+adb = "adb"             # 也可使用 platform-tools/adb.exe 的绝对路径（TOML 单引号）
+appium_url = "http://127.0.0.1:4725"
+allow_send = false      # 人工单条发送另需 --send --confirm-current-thread
+auto_reply = "dry_run"  # android run 独立开关；真发送还需 --generate --allow-send
+tested_version = "40.4.0"  # 已验收 UI 版本；升级后应重验，不能仅改数字跳过
+request_timeout_s = 60
+
 # 小红书：只处理已关注的会话；真正发送同样要 auto_reply = "on" 加 xiaohongshu run --allow-send
 [xiaohongshu]
 auto_reply = "dry_run"   # on / off / dry_run
